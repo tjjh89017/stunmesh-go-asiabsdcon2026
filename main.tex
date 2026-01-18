@@ -28,7 +28,7 @@ tjjh89017@hotmail.com}}
 \maketitle
 
 \begin{abstract}
-STUNMESH-go is an open-source tool that enables WireGuard peers to establish direct peer-to-peer connections through NAT and CGNAT networks using STUN protocol discovery. Originally designed for Linux systems, the tool directly interfaces with the WireGuard kernel module by sharing the same UDP port for both STUN and WireGuard traffic, achieving efficient NAT traversal without requiring relay servers. This paper documents the technical challenges and solutions encountered while porting STUNMESH-go to FreeBSD and macOS platforms. We examine critical platform differences in network programming interfaces, including raw socket implementations, Berkeley Packet Filter (BPF) behaviors, ICMP socket capabilities, and WireGuard API variations. Our work enables popular BSD-based firewall distributions such as pfSense and OPNsense, as well as macOS development environments, to utilize direct P2P WireGuard connectivity. We present detailed technical analysis of cross-platform networking in Go, implementation strategies for handling platform-specific APIs, and validation results from real-world deployments. This work contributes practical insights for developers porting network-intensive applications across Unix-like systems and demonstrates the viability of P2P VPN solutions on BSD platforms.
+STUNMESH-go is an open-source tool that helps WireGuard users connect directly to each other. It works even when both users are behind NAT or CGNAT networks. The tool uses the STUN protocol to discover network addresses. It was first built for Linux systems. The tool works directly with the WireGuard kernel module and uses the same UDP port for both STUN and WireGuard traffic. This makes it efficient and means it does not need relay servers. This paper describes the problems and solutions we found when we moved STUNMESH-go to FreeBSD and macOS. We look at important differences between these systems, including how they handle raw sockets, Berkeley Packet Filter (BPF), ICMP sockets, and WireGuard APIs. Our work makes it possible for popular BSD firewall systems like pfSense and OPNsense to use direct WireGuard connections. macOS users can also use it for development and testing. We explain how to build cross-platform network applications in Go and how to handle different system APIs. We also show test results from real networks. This work helps developers who need to move network applications between Unix-like systems. It also shows that peer-to-peer VPN solutions can work well on BSD systems.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -37,126 +37,126 @@ STUN, CGNAT, peer-to-peer, WireGuard, Go, FreeBSD, macOS, BPF, packet filtering,
 
 \section{Introduction}
 
-Network Address Translation (NAT) and Carrier-Grade NAT (CGNAT) have become ubiquitous in modern networking infrastructure, enabling IPv4 address conservation while creating significant challenges for peer-to-peer communication. Virtual Private Network (VPN) solutions like WireGuard, despite their efficiency and security, struggle to establish direct connections when both peers reside behind NAT or CGNAT boundaries. Traditional solutions often rely on central relay servers, introducing additional latency, bandwidth costs, and single points of failure.
+Network Address Translation (NAT) and Carrier-Grade NAT (CGNAT) are very common in modern networks. They help save IPv4 addresses. However, they create problems for peer-to-peer communication. Virtual Private Network (VPN) solutions like WireGuard are fast and secure. But they have trouble making direct connections when both users are behind NAT or CGNAT. Traditional solutions use central relay servers. These servers add delay, cost more bandwidth, and can fail.
 
-STUNMESH-go addresses this challenge by implementing STUN (Session Traversal Utilities for NAT) protocol-based endpoint discovery while sharing the same UDP port between STUN and WireGuard traffic. This approach enables direct peer-to-peer WireGuard connections through Full-Cone, Restricted-Cone, and Port-Restricted-Cone NAT types without requiring relay infrastructure. By working directly with the WireGuard kernel module rather than embedding wireguard-go with proxy layers, STUNMESH-go achieves lower overhead and better performance compared to solutions like Tailscale.
+STUNMESH-go solves this problem. It uses the STUN protocol (Session Traversal Utilities for NAT) to find network endpoints. It shares the same UDP port for both STUN and WireGuard traffic. This method allows direct peer-to-peer WireGuard connections. It works through Full-Cone, Restricted-Cone, and Port-Restricted-Cone NAT types. It does not need relay servers. STUNMESH-go works directly with the WireGuard kernel module. It does not use wireguard-go with proxy layers. This means it has lower overhead and better performance than solutions like Tailscale.
 
-The original implementation targeted Linux systems, leveraging Linux-specific networking features such as raw IP sockets with system-wide Berkeley Packet Filter (BPF) capabilities and the SO\_BINDTODEVICE socket option. While Linux dominates the server and embedded networking markets, FreeBSD-based systems power critical network infrastructure worldwide. pfSense and OPNsense, two popular open-source firewall distributions built on FreeBSD, serve thousands of enterprise and home networks. Additionally, macOS provides an important development and testing platform for network engineers and developers in the BSD ecosystem.
+The original version was built for Linux systems. It used Linux-specific features like raw IP sockets with system-wide Berkeley Packet Filter (BPF) and the SO\_BINDTODEVICE socket option. Linux is very popular for servers and embedded networks. However, FreeBSD-based systems run important network infrastructure around the world. pfSense and OPNsense are two popular open-source firewall systems built on FreeBSD. They are used in thousands of business and home networks. Also, macOS is an important platform for network engineers and developers who work with BSD systems.
 
-Porting STUNMESH-go to FreeBSD and macOS revealed fundamental differences in how these platforms implement low-level network programming interfaces. These differences span multiple layers: packet capture mechanisms, BPF implementation details, raw socket behaviors, ICMP socket capabilities, and system call APIs. Furthermore, the WireGuard implementations themselves exhibit platform-specific characteristics that required careful handling.
+Moving STUNMESH-go to FreeBSD and macOS showed us big differences in how these systems work. These differences exist at many levels: how they capture packets, how BPF works, how raw sockets behave, how ICMP sockets work, and how system calls work. Also, WireGuard itself works differently on each platform. We had to handle these differences carefully.
 
 This paper makes the following contributions:
 
 \begin{itemize}
-\item Comprehensive documentation of platform-specific network programming differences between Linux, FreeBSD, and macOS, focusing on raw sockets, BPF, and ICMP
-\item Detailed implementation strategies for portable network code in Go, including platform-specific build tags and abstraction patterns
-\item Analysis of packet capture challenges across different link layer types and their impact on BPF filter design
-\item Validation of the ported implementation on FreeBSD 14.3-RELEASE, OPNsense 25.1, and modern macOS versions
-\item Open-source implementation available for the BSD community and network engineering practitioners
+\item Complete documentation of how network programming differs between Linux, FreeBSD, and macOS. We focus on raw sockets, BPF, and ICMP.
+\item Detailed strategies for writing portable network code in Go. We explain how to use platform-specific build tags and abstraction patterns.
+\item Analysis of packet capture problems across different link layer types. We show how this affects BPF filter design.
+\item Testing results on FreeBSD 14.3-RELEASE, OPNsense 25.1, and modern macOS versions.
+\item Open-source code that is available for the BSD community and network engineers.
 \end{itemize}
 
-The remainder of this paper is organized as follows: Section II provides background on STUN, WireGuard, and existing NAT traversal solutions. Section III describes the original Linux implementation architecture. Section IV details the platform-specific challenges encountered during porting. Section V presents our implementation approach and solutions. Section VI discusses testing methodology and results. Section VII reviews related work. Section VIII concludes with lessons learned and future directions.
+The rest of this paper is organized as follows: Section II gives background on STUN, WireGuard, and existing NAT traversal solutions. Section III describes the original Linux design. Section IV explains the platform-specific problems we found during porting. Section V presents our solutions. Section VI discusses our testing methods and results. Section VII reviews related work. Section VIII concludes with lessons learned and future work.
 
 \section{Background}
 
 \subsection{WireGuard and NAT Challenges}
 
-WireGuard is a modern VPN protocol designed for simplicity, high performance, and strong cryptography. Unlike traditional VPN solutions that operate at Layer 3 (IPsec) or require complex handshaking (OpenVPN), WireGuard uses a streamlined approach with Curve25519 for key exchange, ChaCha20 for encryption, and Poly1305 for authentication. Its minimal codebase (approximately 4,000 lines) makes it auditable and maintainable.
+WireGuard is a modern VPN protocol. It is designed to be simple, fast, and secure. Traditional VPN solutions like IPsec work at Layer 3. OpenVPN requires complex handshaking. WireGuard uses a simpler approach. It uses Curve25519 for key exchange, ChaCha20 for encryption, and Poly1305 for authentication. The code is small (about 4,000 lines). This makes it easy to check and maintain.
 
-However, WireGuard's design assumes that at least one peer has a stable, reachable endpoint. When both peers sit behind NAT or CGNAT, neither can directly initiate connections to the other. NAT devices typically only allow inbound packets that match existing outbound connection states, creating a deadlock scenario where neither peer can reach the other without external coordination.
+However, WireGuard's design assumes that at least one user has a stable, reachable endpoint. When both users are behind NAT or CGNAT, neither can start connections to the other. NAT devices usually only allow inbound packets that match existing outbound connections. This creates a deadlock where neither user can reach the other without help from outside.
 
 \subsection{STUN Protocol}
 
-Session Traversal Utilities for NAT (STUN), defined in RFC 5389, provides a mechanism for hosts to discover their public-facing IP address and port as observed by external servers. A STUN client sends a binding request to a STUN server, which responds with the source address and port from which it received the request. This information reveals the client's public endpoint after NAT translation.
+Session Traversal Utilities for NAT (STUN) is defined in RFC 5389. It helps computers discover their public IP address and port. A STUN client sends a request to a STUN server. The server responds with the source address and port where it received the request from. This information shows the client's public endpoint after NAT translation.
 
-STUN supports multiple NAT type detection: Full-Cone NAT (any external host can send to the mapped port), Restricted-Cone NAT (only hosts the client has sent to can reply), Port-Restricted-Cone NAT (restricted cone with port matching), and Symmetric NAT (different mappings for different destinations, difficult for P2P). STUNMESH-go leverages STUN for endpoint discovery, supporting all cone NAT types with best results when at least one peer has a cone NAT configuration.
+STUN can detect multiple NAT types. Full-Cone NAT means any external computer can send to the mapped port. Restricted-Cone NAT means only computers the client has sent to can reply. Port-Restricted-Cone NAT is like restricted cone but it also checks the port number. Symmetric NAT creates different mappings for different destinations and is difficult for peer-to-peer connections. STUNMESH-go uses STUN to find endpoints. It supports all cone NAT types. It works best when at least one user has a cone NAT setup.
 
 \subsection{Existing Solutions}
 
-Several solutions exist for WireGuard NAT traversal, each with different trade-offs:
+Several solutions exist for WireGuard NAT traversal. Each has different strengths and weaknesses:
 
-\textbf{Tailscale} embeds wireguard-go (the Go implementation of WireGuard) within its application, adding a coordination layer and DERP (Designated Encrypted Relay for Packets) relay servers. While Tailscale provides excellent user experience and robust NAT traversal, it requires running proprietary coordination infrastructure and cannot directly utilize kernel WireGuard modules, potentially increasing overhead.
+\textbf{Tailscale} includes wireguard-go (the Go version of WireGuard) in its application. It adds a coordination layer and DERP (Designated Encrypted Relay for Packets) relay servers. Tailscale is easy to use and works well with NAT. However, it needs proprietary coordination servers. It cannot use kernel WireGuard modules directly. This can add extra overhead.
 
-\textbf{Netmaker} offers a similar approach with a focus on mesh networking, but also requires running coordination servers and cannot leverage kernel WireGuard implementations on systems that have them.
+\textbf{Netmaker} uses a similar approach. It focuses on mesh networking. It also needs coordination servers and cannot use kernel WireGuard on systems that have it.
 
-\textbf{wireguard-p2p} by manuels inspired STUNMESH-go's design. However, it lacked the flexibility needed for production deployments, particularly around storage backends and multi-peer scenarios.
+\textbf{wireguard-p2p} by manuels inspired STUNMESH-go's design. However, it did not have enough flexibility for production use. It had limitations with storage backends and multi-peer scenarios.
 
-STUNMESH-go distinguishes itself by working directly with kernel WireGuard implementations, avoiding the overhead of embedded Go implementations, and providing a flexible plugin system for endpoint storage that supports various backends from simple file-based storage to DNS TXT records in Cloudflare.
+STUNMESH-go is different because it works directly with kernel WireGuard. It avoids the overhead of embedded Go versions. It provides a flexible plugin system for endpoint storage. This supports many backends from simple file storage to DNS TXT records in Cloudflare.
 
 \section{STUNMESH-go Architecture}
 
-Understanding the original Linux implementation provides essential context for the porting challenges discussed later. STUNMESH-go follows a controller-based architecture with four main components:
+Understanding the original Linux version is important. It helps explain the porting problems we discuss later. STUNMESH-go uses a controller-based design with four main parts:
 
 \subsection{Core Controllers}
 
-\textbf{Bootstrap Controller} initializes WireGuard devices and discovers existing peer configurations. It reads configuration files, verifies WireGuard interface states, and establishes the initial peer mapping between configuration and device state.
+\textbf{Bootstrap Controller} sets up WireGuard devices and finds existing peer configurations. It reads configuration files, checks WireGuard interface states, and creates the initial peer mapping between configuration and device state.
 
-\textbf{Publish Controller} performs STUN discovery to determine the device's public-facing endpoint. Critically, it binds to the same UDP port that WireGuard uses, sending STUN binding requests and receiving responses that reveal the NAT-translated address and port. The discovered endpoint is encrypted using NaCl box (Curve25519 + XSalsa20 + Poly1305) and stored via configured plugins.
+\textbf{Publish Controller} performs STUN discovery to find the device's public endpoint. It binds to the same UDP port that WireGuard uses. It sends STUN binding requests and receives responses. These responses show the NAT-translated address and port. The discovered endpoint is encrypted using NaCl box (Curve25519 + XSalsa20 + Poly1305). It is then stored using configured plugins.
 
-\textbf{Establish Controller} retrieves peer endpoints from storage, decrypts them, and configures WireGuard peer settings using wgctrl library calls. This controller handles the actual WireGuard API interaction, updating peer endpoints as they change.
+\textbf{Establish Controller} gets peer endpoints from storage and decrypts them. It configures WireGuard peer settings using wgctrl library calls. This controller handles the WireGuard API interaction. It updates peer endpoints when they change.
 
-\textbf{Refresh Controller} manages periodic re-discovery and updates on a configured interval (typically 60 seconds), ensuring endpoints remain current as network conditions change.
+\textbf{Refresh Controller} manages periodic re-discovery and updates. It runs at a configured interval (usually 60 seconds). This ensures endpoints stay current as network conditions change.
 
 \subsection{Plugin Architecture}
 
-STUNMESH-go implements a flexible plugin system supporting three plugin types: built-in plugins compiled into the binary (e.g., Cloudflare DNS), exec plugins that communicate via JSON over stdin/stdout, and shell plugins with simplified variable-based protocols. This architecture allows deployments to choose appropriate storage backends from simple file-based storage to DNS TXT records, Redis, or custom API endpoints.
+STUNMESH-go has a flexible plugin system. It supports three plugin types: built-in plugins compiled into the binary (like Cloudflare DNS), exec plugins that communicate using JSON over stdin/stdout, and shell plugins with simplified variable-based protocols. This design allows users to choose different storage backends. These can be simple file storage, DNS TXT records, Redis, or custom API endpoints.
 
 \subsection{STUN Implementation on Linux}
 
-The Linux STUN implementation represents the most sophisticated aspect of STUNMESH-go. It creates raw IP sockets (using \texttt{net.ListenPacket("ip4:17", "0.0.0.0")} for IPv4) that bypass the kernel's UDP socket handling, allowing the application to construct complete UDP packets including headers. Berkeley Packet Filter (BPF) programs filter incoming traffic to capture only STUN responses destined for the WireGuard port.
+The Linux STUN implementation is the most advanced part of STUNMESH-go. It creates raw IP sockets (using \texttt{net.ListenPacket("ip4:17", "0.0.0.0")} for IPv4). These bypass the kernel's UDP socket handling. This allows the application to build complete UDP packets including headers. Berkeley Packet Filter (BPF) programs filter incoming traffic. They capture only STUN responses for the WireGuard port.
 
-The key insight enabling port sharing is that raw sockets receive packets before the kernel's UDP stack processes them. The BPF filter examines destination port and STUN magic cookie (0x2112A442) to identify STUN responses, passing only relevant packets to the application while allowing normal WireGuard traffic to reach the kernel WireGuard module undisturbed.
+The key idea that makes port sharing work is this: raw sockets receive packets before the kernel's UDP stack processes them. The BPF filter checks the destination port and STUN magic cookie (0x2112A442). It identifies STUN responses and passes only relevant packets to the application. Normal WireGuard traffic reaches the kernel WireGuard module without any problems.
 
 This approach works on Linux because:
 \begin{enumerate}
 \item Raw IP sockets can listen system-wide across all interfaces
-\item BPF filters attach directly to raw sockets via \texttt{SetBPF()}
-\item The Linux kernel processes BPF filters before stripping IP headers for IPv4, but after stripping for IPv6
-\item Raw socket packets and kernel UDP sockets coexist without interference
+\item BPF filters attach directly to raw sockets using \texttt{SetBPF()}
+\item The Linux kernel processes BPF filters before removing IP headers for IPv4, but after removing them for IPv6
+\item Raw socket packets and kernel UDP sockets work together without problems
 \end{enumerate}
 
 \subsection{Ping Monitoring System}
 
-The ping monitoring subsystem provides tunnel health detection and automatic recovery. For each configured peer, the system periodically sends ICMP Echo requests through the WireGuard tunnel to a designated target IP. On Linux, this uses SO\_BINDTODEVICE to bind the ICMP socket to the specific WireGuard interface, ensuring pings traverse the tunnel.
+The ping monitoring subsystem checks tunnel health and provides automatic recovery. For each peer, the system regularly sends ICMP Echo requests through the WireGuard tunnel to a target IP. On Linux, it uses SO\_BINDTODEVICE to bind the ICMP socket to the specific WireGuard interface. This ensures pings go through the tunnel.
 
-When ping failures occur, the monitor triggers publish and establish operations with adaptive retry logic: fixed 2-second intervals for the first three retries, then arithmetic progression backoff (5s, 10s, 15s, etc.) until reaching the configured refresh interval. This allows rapid recovery from transient failures while preventing excessive retries during persistent outages.
+When pings fail, the monitor triggers publish and establish operations. It uses adaptive retry logic: fixed 2-second intervals for the first three retries, then longer intervals (5s, 10s, 15s, etc.) until reaching the configured refresh interval. This allows quick recovery from short failures. It also prevents too many retries during long outages.
 
 \section{Platform-Specific Challenges}
 
-Porting STUNMESH-go to FreeBSD and macOS revealed fundamental architectural differences in network programming interfaces. This section documents the specific technical challenges encountered.
+Moving STUNMESH-go to FreeBSD and macOS showed us basic differences in network programming interfaces. This section explains the specific technical problems we found.
 
 \subsection{Raw Socket and BPF Architecture}
 
-The most significant challenge involved packet capture mechanisms. While Linux supports system-wide raw sockets with BPF filtering, FreeBSD and macOS require interface-specific packet capture via the BPF device interface (\texttt{/dev/bpf}).
+The biggest challenge was packet capture. Linux supports system-wide raw sockets with BPF filtering. FreeBSD and macOS need interface-specific packet capture using the BPF device interface (\texttt{/dev/bpf}).
 
 \subsubsection{Linux Approach}
-On Linux, creating a raw IP socket provides access to all packets matching the specified protocol across all network interfaces:
+On Linux, creating a raw IP socket gives access to all packets that match the specified protocol across all network interfaces:
 
 \begin{lstlisting}[language=Go]
 // Listen on all interfaces for UDP (protocol 17)
 conn, err := net.ListenPacket("ip4:17", "0.0.0.0")
 \end{lstlisting}
 
-BPF filters attach directly to this socket, and the kernel delivers filtered packets to the application. The BPF program sees packets at different stages depending on protocol:
+BPF filters attach directly to this socket. The kernel sends filtered packets to the application. The BPF program sees packets at different stages depending on the protocol:
 
 \begin{itemize}
-\item \textbf{IPv4}: BPF filter runs before IP header stripping, seeing full packet (IP header + UDP header + payload). Offsets for IPv4: UDP destination port at byte 22, STUN magic cookie at byte 32.
-\item \textbf{IPv6}: BPF filter runs after IP header stripping, seeing only UDP header + payload. Offsets for IPv6: UDP destination port at byte 2, STUN magic cookie at byte 12.
+\item \textbf{IPv4}: BPF filter runs before removing the IP header. It sees the full packet (IP header + UDP header + payload). Offsets for IPv4: UDP destination port at byte 22, STUN magic cookie at byte 32.
+\item \textbf{IPv6}: BPF filter runs after removing the IP header. It sees only UDP header + payload. Offsets for IPv6: UDP destination port at byte 2, STUN magic cookie at byte 12.
 \end{itemize}
 
-Application code receives packets with IP headers already stripped for both protocols, consistently seeing UDP header (8 bytes) + payload.
+Application code receives packets with IP headers already removed for both protocols. It always sees UDP header (8 bytes) + payload.
 
 \subsubsection{FreeBSD/macOS Approach}
-FreeBSD and macOS follow a different model inherited from classic BSD packet filter architecture. Applications must:
+FreeBSD and macOS use a different model from classic BSD packet filter design. Applications must:
 
 \begin{enumerate}
-\item Enumerate all network interfaces
+\item List all network interfaces
 \item Open a BPF device (\texttt{/dev/bpf}) for each interface to monitor
-\item Set BPF filter programs per interface
+\item Set BPF filter programs for each interface
 \item Read packets from multiple BPF devices
 \end{enumerate}
 
-The Go ecosystem provides the \texttt{github.com/packetcap/go-pcap} library that abstracts BPF device operations. However, this requires interface-specific handling:
+The Go ecosystem has the \texttt{github.com/packetcap/go-pcap} library. It simplifies BPF device operations. However, you still need to handle each interface separately:
 
 \begin{lstlisting}[language=Go]
 // Open BPF for specific interface
@@ -168,17 +168,17 @@ handle, err := pcap.OpenLive(ctx, ifaceName,
 err = handle.SetRawBPFFilter(filter)
 \end{lstlisting}
 
-This architectural difference has several implications:
+This design difference has several effects:
 
-\textbf{Interface Enumeration}: The application must discover all eligible interfaces, excluding the WireGuard interface itself (to avoid capturing WireGuard's own traffic) and loopback interfaces.
+\textbf{Interface Enumeration}: The application must find all eligible interfaces. It must exclude the WireGuard interface itself (to avoid capturing WireGuard's own traffic) and loopback interfaces.
 
-\textbf{Multiple Capture Loops}: Instead of one capture loop for all interfaces, the application spawns goroutines for each interface, each reading from its own BPF handle.
+\textbf{Multiple Capture Loops}: Instead of one capture loop for all interfaces, the application creates goroutines for each interface. Each reads from its own BPF handle.
 
-\textbf{Link Layer Variations}: Different interfaces may use different link layer encapsulations. Ethernet interfaces have 14-byte Ethernet headers, while loopback interfaces use 4-byte BSD loopback (Null) headers with protocol family indicators.
+\textbf{Link Layer Variations}: Different interfaces may use different link layer types. Ethernet interfaces have 14-byte Ethernet headers. Loopback interfaces use 4-byte BSD loopback (Null) headers with protocol family indicators.
 
 \subsection{BPF Filter Offset Calculations}
 
-BPF filters use absolute byte offsets to examine packet fields. Link layer variations require different offset calculations:
+BPF filters use absolute byte offsets to check packet fields. Different link layer types need different offset calculations:
 
 \begin{lstlisting}[language=Go]
 func calculatePayloadOffset(linkType uint32,
@@ -201,11 +201,11 @@ func calculatePayloadOffset(linkType uint32,
 }
 \end{lstlisting}
 
-For Ethernet frames carrying IPv6, the BPF filter must verify the EtherType field (0x86DD) before examining UDP ports. The BSD loopback Null header uses different protocol values: 0x02000000 (big-endian) for IPv4, and 0x18000000, 0x1C000000, or 0x1E000000 for IPv6 depending on the specific IPv6 address family variant.
+For Ethernet frames with IPv6, the BPF filter must check the EtherType field (0x86DD) before checking UDP ports. The BSD loopback Null header uses different protocol values: 0x02000000 (big-endian) for IPv4, and 0x18000000, 0x1C000000, or 0x1E000000 for IPv6. The value depends on the specific IPv6 address family type.
 
 \subsection{ICMP Socket Capabilities}
 
-The ping monitoring system exposed another critical platform difference. Linux supports the SO\_BINDTODEVICE socket option, allowing applications to bind sockets to specific network interfaces:
+The ping monitoring system showed another important platform difference. Linux supports the SO\_BINDTODEVICE socket option. This allows applications to bind sockets to specific network interfaces:
 
 \begin{lstlisting}[language=Go]
 // Linux: bind ICMP socket to specific interface
@@ -214,9 +214,9 @@ err = syscall.SetsockoptString(fd,
     syscall.SO_BINDTODEVICE, deviceName)
 \end{lstlisting}
 
-This ensures ICMP Echo requests traverse the intended WireGuard tunnel rather than the default route. Without this binding, pings might incorrectly use the primary network interface, failing to detect tunnel-specific failures.
+This ensures ICMP Echo requests go through the intended WireGuard tunnel instead of the default route. Without this binding, pings might wrongly use the primary network interface. This means they would not detect tunnel-specific failures.
 
-FreeBSD and macOS lack SO\_BINDTODEVICE. While workarounds exist (manipulating routing tables, using SO\_DONTROUTE), these approaches introduce complexity and potential race conditions. The current implementation on BSD platforms creates standard ICMP connections without device binding, accepting this limitation for the initial release:
+FreeBSD and macOS do not have SO\_BINDTODEVICE. Workarounds exist (changing routing tables, using SO\_DONTROUTE). However, these add complexity and can cause race conditions. The current BSD version creates standard ICMP connections without device binding. We accept this limitation for the initial release:
 
 \begin{lstlisting}[language=Go]
 // BSD: standard ICMP, no device binding
@@ -225,13 +225,13 @@ conn, err := icmp.ListenPacket("ip4:icmp",
 // deviceName parameter ignored
 \end{lstlisting}
 
-For deployments where routing is correctly configured to send traffic to the WireGuard tunnel, this limitation has minimal impact. However, complex multi-interface scenarios may require additional routing configuration.
+For setups where routing is configured correctly to send traffic to the WireGuard tunnel, this limitation has little impact. However, complex multi-interface scenarios may need additional routing configuration.
 
 \subsection{WireGuard API Differences}
 
-The wgctrl library abstracts WireGuard userspace API access across platforms, but platforms exhibit different behaviors when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state machine.
+The wgctrl library simplifies WireGuard userspace API access across platforms. However, platforms behave differently when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state.
 
-FreeBSD's WireGuard implementation (kernel version) requires a different approach. The STUNMESH-go code sets \texttt{UpdateOnly = false} for FreeBSD, allowing the library to remove and re-add peers if necessary:
+FreeBSD's WireGuard version (kernel version) needs a different approach. The STUNMESH-go code sets \texttt{UpdateOnly = false} for FreeBSD. This allows the library to remove and re-add peers if necessary:
 
 \begin{lstlisting}[language=Go]
 //go:build freebsd
@@ -251,19 +251,19 @@ const (
 )
 \end{lstlisting}
 
-macOS uses wireguard-go (the Go userspace implementation), which supports update-only mode similar to Linux kernel WireGuard.
+macOS uses wireguard-go (the Go userspace version). It supports update-only mode similar to Linux kernel WireGuard.
 
 \subsection{IPv6 Checksum Requirements}
 
-IPv6 introduces mandatory checksum requirements that differ from IPv4. RFC 8200 specifies that IPv6 UDP checksums are mandatory (unlike IPv4 where they are optional). When constructing raw IPv6 UDP packets, the kernel must calculate checksums.
+IPv6 has mandatory checksum requirements that differ from IPv4. RFC 8200 says that IPv6 UDP checksums are mandatory. In IPv4, they are optional. When building raw IPv6 UDP packets, the kernel must calculate checksums.
 
-The Go \texttt{ipv6.PacketConn} type provides \texttt{SetChecksum(true, 6)} to enable kernel checksum calculation, with offset 6 indicating the UDP checksum field's position within the UDP header. This detail is critical; without correct checksum handling, STUN servers reject malformed packets.
+The Go \texttt{ipv6.PacketConn} type provides \texttt{SetChecksum(true, 6)}. This enables kernel checksum calculation. The offset 6 indicates the UDP checksum field's position in the UDP header. This detail is important. Without correct checksum handling, STUN servers reject broken packets.
 
-Additionally, when sending packets via raw IPv6 sockets, addresses must use \texttt{net.IPAddr} rather than \texttt{net.UDPAddr}. This subtle difference stems from raw sockets sending complete packets including UDP headers, whereas \texttt{net.UDPAddr} implies the kernel should construct UDP headers.
+Also, when sending packets through raw IPv6 sockets, addresses must use \texttt{net.IPAddr} instead of \texttt{net.UDPAddr}. This small difference exists because raw sockets send complete packets including UDP headers. \texttt{net.UDPAddr} means the kernel should build UDP headers.
 
 \subsection{CGO and Build Configuration}
 
-FreeBSD's BPF implementation requires CGO (Go's foreign function interface) for certain low-level operations. The build system must conditionally enable CGO for FreeBSD while keeping it disabled for Linux and macOS to produce static binaries:
+FreeBSD's BPF implementation needs CGO (Go's foreign function interface) for some low-level operations. The build system must turn on CGO for FreeBSD. It keeps it off for Linux and macOS to create static binaries:
 
 \begin{lstlisting}
 # Makefile excerpt
@@ -274,15 +274,15 @@ else
 endif
 \end{lstlisting}
 
-Cross-compilation for multiple platforms with varying CGO requirements complicates the build pipeline. The project uses GitHub Actions to build separate binaries for each platform (Linux amd64/arm/arm64/mipsle, Darwin amd64/arm64, FreeBSD amd64/arm64), each with appropriate CGO settings.
+Cross-compilation for multiple platforms with different CGO requirements makes the build process more complex. The project uses GitHub Actions to build separate binaries for each platform (Linux amd64/arm/arm64/mipsle, Darwin amd64/arm64, FreeBSD amd64/arm64). Each has the right CGO settings.
 
 \section{Implementation}
 
-This section describes the architectural approaches and code patterns used to address the challenges identified above.
+This section describes the design approaches and code patterns we used to solve the challenges mentioned above.
 
 \subsection{Platform-Specific Build Tags}
 
-Go's build tag system allows conditional compilation based on operating system and architecture. STUNMESH-go extensively uses build tags to maintain platform-specific implementations:
+Go's build tag system allows conditional compilation based on operating system and architecture. STUNMESH-go uses build tags extensively to keep platform-specific code separate:
 
 \begin{lstlisting}[language=Go]
 //go:build linux
@@ -300,11 +300,11 @@ package stun
 // BSD implementation using pcap
 \end{lstlisting}
 
-Files with these tags compile only for their target platforms. This approach keeps platform-specific code isolated while maintaining a clean API surface. The main application code interacts with a common \texttt{Stun} interface without awareness of underlying platform differences.
+Files with these tags compile only for their target platforms. This approach keeps platform-specific code separate while keeping a clean API. The main application code works with a common \texttt{Stun} interface. It does not need to know about platform differences.
 
 \subsection{Abstracted STUN Interface}
 
-Both Linux and BSD implementations provide identical exported types and methods:
+Both Linux and BSD versions provide the same exported types and methods:
 
 \begin{lstlisting}[language=Go]
 type Stun struct {
@@ -323,11 +323,11 @@ func (s *Stun) Start(ctx context.Context)
 func (s *Stun) Stop() error
 \end{lstlisting}
 
-The \texttt{New} function creates platform-appropriate STUN clients. On Linux, it creates raw sockets with system-wide BPF filters. On BSD, it enumerates interfaces, opens pcap handles, and configures per-interface BPF filters.
+The \texttt{New} function creates the right STUN client for each platform. On Linux, it creates raw sockets with system-wide BPF filters. On BSD, it lists interfaces, opens pcap handles, and sets up per-interface BPF filters.
 
 \subsection{BSD Interface Enumeration}
 
-The BSD implementation includes logic to discover and filter network interfaces:
+The BSD version includes code to find and filter network interfaces:
 
 \begin{lstlisting}[language=Go]
 func getAllEligibleInterfaces(
@@ -354,11 +354,11 @@ func getAllEligibleInterfaces(
 }
 \end{lstlisting}
 
-For each eligible interface, the code opens a pcap handle, determines the link layer type, calculates appropriate offsets, and constructs a matching BPF filter.
+For each eligible interface, the code opens a pcap handle, finds the link layer type, calculates the right offsets, and builds a matching BPF filter.
 
 \subsection{Link Layer-Aware BPF Filters}
 
-The BSD implementation provides separate BPF filter generators for Null and Ethernet link layers. The Ethernet IPv6 filter demonstrates EtherType checking:
+The BSD version has separate BPF filter generators for Null and Ethernet link layers. The Ethernet IPv6 filter shows EtherType checking:
 
 \begin{lstlisting}[language=Go]
 func stunEthernetBpfFilter(ctx context.Context,
@@ -385,11 +385,11 @@ func stunEthernetBpfFilter(ctx context.Context,
 }
 \end{lstlisting}
 
-The Null link layer filter for IPv6 must handle three possible protocol values (0x18000000, 0x1C000000, 0x1E000000), requiring a more complex BPF program with multiple comparison branches.
+The Null link layer filter for IPv6 must handle three possible protocol values (0x18000000, 0x1C000000, 0x1E000000). This needs a more complex BPF program with multiple comparison branches.
 
 \subsection{Concurrent Packet Capture}
 
-BSD's interface-specific approach requires concurrent packet reading from multiple interfaces:
+BSD's interface-specific approach needs to read packets from multiple interfaces at the same time:
 
 \begin{lstlisting}[language=Go]
 func (s *Stun) Start(ctx context.Context) {
@@ -428,7 +428,7 @@ func (s *Stun) Start(ctx context.Context) {
 }
 \end{lstlisting}
 
-Each goroutine reads from its assigned interface until it captures a STUN response, then closes. This design assumes STUN responses arrive on the same interface that sent the request, which holds true for typical NAT gateway configurations.
+Each goroutine reads from its assigned interface until it captures a STUN response, then closes. This design assumes STUN responses arrive on the same interface that sent the request. This is true for typical NAT gateway setups.
 
 \subsection{Platform-Specific ICMP Implementation}
 
@@ -449,11 +449,11 @@ func (c *ICMPConn) Recv(buffer []byte,
 func (c *ICMPConn) Close() error
 \end{lstlisting}
 
-The Linux implementation creates raw ICMP sockets and applies SO\_BINDTODEVICE. The BSD implementation uses the standard \texttt{icmp.ListenPacket} without device binding, accepting the deviceName parameter but ignoring it.
+The Linux version creates raw ICMP sockets and uses SO\_BINDTODEVICE. The BSD version uses the standard \texttt{icmp.ListenPacket} without device binding. It accepts the deviceName parameter but ignores it.
 
 \subsection{IPv6 Support}
 
-Both platforms now support IPv6 STUN discovery and dual-stack configurations. The implementation handles IPv6-specific requirements:
+Both platforms now support IPv6 STUN discovery and dual-stack setups. The code handles IPv6-specific requirements:
 
 \begin{lstlisting}[language=Go]
 if s.protocol == "ipv6" {
@@ -478,39 +478,39 @@ if udpAddr, ok := addr.(*net.UDPAddr); ok {
 }
 \end{lstlisting}
 
-This ensures correct behavior with raw IPv6 sockets where the application constructs complete UDP packets.
+This ensures correct behavior with raw IPv6 sockets where the application builds complete UDP packets.
 
 \subsection{Protocol Configuration}
 
-The implementation supports two-level protocol configuration:
+The code supports two-level protocol configuration:
 
-\textbf{Interface Protocol} determines which STUN discoveries to perform (ipv4, ipv6, or dualstack). A dualstack configuration performs both IPv4 and IPv6 STUN discovery, storing both endpoints.
+\textbf{Interface Protocol} decides which STUN discoveries to perform (ipv4, ipv6, or dualstack). A dualstack configuration performs both IPv4 and IPv6 STUN discovery and stores both endpoints.
 
-\textbf{Peer Protocol} determines which endpoint to use (ipv4, ipv6, prefer\_ipv4, or prefer\_ipv6). The prefer variants enable fallback behavior, selecting the preferred protocol if available, otherwise using the alternative.
+\textbf{Peer Protocol} decides which endpoint to use (ipv4, ipv6, prefer\_ipv4, or prefer\_ipv6). The prefer options enable fallback behavior. They select the preferred protocol if available, otherwise use the alternative.
 
-This design accommodates mixed environments where some peers have only IPv4 connectivity while others support IPv6, allowing administrators to optimize endpoint selection per peer.
+This design works well in mixed environments. Some peers may have only IPv4 connectivity while others support IPv6. Administrators can optimize endpoint selection for each peer.
 
 \section{Testing and Validation}
 
-Validation of the ported implementation proceeded across multiple platforms and scenarios to ensure correct operation in real-world conditions.
+We tested the ported version on multiple platforms and scenarios to ensure it works correctly in real-world conditions.
 
 \subsection{Test Environments}
 
-\textbf{FreeBSD 14.3-RELEASE}: Testing on physical hardware and virtual machines verified compatibility with the latest stable FreeBSD release. FreeBSD's kernel WireGuard implementation (if-wg driver) provided the test environment.
+\textbf{FreeBSD 14.3-RELEASE}: We tested on physical hardware and virtual machines. This verified compatibility with the latest stable FreeBSD release. FreeBSD's kernel WireGuard version (if-wg driver) provided the test environment.
 
-\textbf{OPNsense 25.1}: As a production FreeBSD-based firewall distribution, OPNsense represents a critical target platform. Virtual machines running OPNsense validated the complete workflow including WireGuard configuration, STUNMESH-go deployment, and multi-interface scenarios typical of firewall appliances.
+\textbf{OPNsense 25.1}: OPNsense is a production FreeBSD-based firewall system. It is a critical target platform. Virtual machines running OPNsense tested the complete workflow. This included WireGuard configuration, STUNMESH-go deployment, and multi-interface scenarios typical of firewall systems.
 
-\textbf{macOS}: Testing spanned multiple macOS versions on both Intel and Apple Silicon Macs, using wireguard-go installations. macOS provides an important developer platform where network engineers develop and test configurations before deployment.
+\textbf{macOS}: We tested multiple macOS versions on both Intel and Apple Silicon Macs, using wireguard-go installations. macOS is an important developer platform where network engineers develop and test configurations before deployment.
 
-\textbf{Mixed Environments}: Real-world validation included heterogeneous networks combining VyOS routers with LTE modems, OPNsense firewalls, Linux servers, and macOS laptops, all behind various NAT types.
+\textbf{Mixed Environments}: Real-world testing included mixed networks. These combined VyOS routers with LTE modems, OPNsense firewalls, Linux servers, and macOS laptops. All were behind various NAT types.
 
 \subsection{Test Scenarios}
 
 \subsubsection{Basic Connectivity}
-Initial tests verified that STUN discovery correctly identifies public endpoints across NAT boundaries. Two peers behind separate CGNAT networks (mobile carriers) successfully discovered each other and established WireGuard tunnels.
+Initial tests checked that STUN discovery correctly finds public endpoints across NAT boundaries. Two peers behind separate CGNAT networks (mobile carriers) successfully found each other and set up WireGuard tunnels.
 
 \subsubsection{Link Layer Variations}
-BSD testing specifically verified correct BPF filter operation across different interface types:
+BSD testing specifically checked correct BPF filter operation across different interface types:
 \begin{itemize}
 \item Ethernet interfaces (em0, igb0): 14-byte Ethernet headers
 \item Loopback (lo0): 4-byte Null headers
@@ -520,129 +520,129 @@ BSD testing specifically verified correct BPF filter operation across different 
 Packet captures confirmed that BPF filters correctly matched STUN responses regardless of link layer type.
 
 \subsubsection{Multi-Interface Scenarios}
-OPNsense deployments typically have multiple interfaces (WAN, LAN, DMZ, etc.). Testing confirmed that STUNMESH-go correctly:
+OPNsense deployments usually have multiple interfaces (WAN, LAN, DMZ, etc.). Testing confirmed that STUNMESH-go correctly:
 \begin{itemize}
 \item Excludes the WireGuard interface from STUN listening
-\item Captures STUN responses on the appropriate WAN interface
+\item Captures STUN responses on the right WAN interface
 \item Handles interface state changes (interfaces going up/down)
 \end{itemize}
 
 \subsubsection{IPv6 Support}
-Dual-stack testing verified IPv6 STUN discovery functionality. Networks with native IPv6 connectivity successfully performed IPv6 STUN discovery, stored both IPv4 and IPv6 endpoints, and allowed peers to select endpoints based on their connectivity preferences.
+Dual-stack testing checked IPv6 STUN discovery functionality. Networks with native IPv6 connectivity successfully performed IPv6 STUN discovery, stored both IPv4 and IPv6 endpoints, and allowed peers to select endpoints based on their connectivity preferences.
 
 \subsubsection{NAT Type Coverage}
-Testing encompassed multiple NAT configurations:
+Testing included multiple NAT configurations:
 \begin{itemize}
 \item Full-Cone NAT (home routers): Successful bidirectional connectivity
 \item Port-Restricted-Cone NAT (enterprise firewalls): Successful connectivity after handshake
 \item CGNAT (mobile carriers): Successful connectivity when at least one peer had cone NAT
 \end{itemize}
 
-Symmetric NAT scenarios proved challenging, as expected, due to unpredictable port mapping behavior.
+Symmetric NAT scenarios were challenging, as expected. This is due to unpredictable port mapping behavior.
 
 \subsection{Ping Monitoring Validation}
 
-The ping monitoring system underwent extensive testing to verify tunnel health detection and automatic recovery:
+The ping monitoring system went through extensive testing to check tunnel health detection and automatic recovery:
 
 \begin{itemize}
-\item \textbf{Normal Operation}: Confirmed that ICMP Echo requests traverse WireGuard tunnels and receive replies under normal conditions
-\item \textbf{Failure Detection}: Validated that network disruptions (disconnecting WAN interfaces, blocking UDP ports) trigger ping failures
+\item \textbf{Normal Operation}: Confirmed that ICMP Echo requests go through WireGuard tunnels and receive replies under normal conditions
+\item \textbf{Failure Detection}: Checked that network disruptions (disconnecting WAN interfaces, blocking UDP ports) trigger ping failures
 \item \textbf{Automatic Recovery}: Verified that the system automatically triggers endpoint re-discovery and tunnel re-establishment after failures
-\item \textbf{Adaptive Backoff}: Confirmed that retry intervals follow the configured pattern (fixed intervals, then arithmetic progression)
+\item \textbf{Adaptive Backoff}: Confirmed that retry intervals follow the configured pattern (fixed intervals, then longer progression)
 \end{itemize}
 
-The BSD limitation regarding lack of SO\_BINDTODEVICE has minimal impact in typical configurations where routing tables correctly direct traffic through WireGuard tunnels. However, complex multi-path scenarios may require additional routing configuration.
+The BSD limitation with no SO\_BINDTODEVICE has little impact in typical setups where routing tables correctly send traffic through WireGuard tunnels. However, complex multi-path scenarios may need additional routing configuration.
 
 \subsection{Performance Considerations}
 
-While detailed performance benchmarking (latency, throughput) was not the primary focus, observational testing indicated that the BSD implementation performs comparably to Linux:
+We did not focus on detailed performance testing (latency, throughput). However, observational testing showed that the BSD version performs similarly to Linux:
 
 \begin{itemize}
 \item STUN discovery completes within typical timeframes (1-2 seconds)
-\item WireGuard tunnel establishment occurs within one or two refresh intervals as expected
-\item Ping monitoring adds negligible overhead
-\item Multiple concurrent tunnels operate without resource exhaustion
+\item WireGuard tunnel establishment happens within one or two refresh intervals as expected
+\item Ping monitoring adds very little overhead
+\item Multiple concurrent tunnels work without running out of resources
 \end{itemize}
 
-The pcap-based approach on BSD introduces slightly more overhead than Linux's raw socket approach due to additional abstraction layers and per-interface handling. However, this overhead is negligible compared to WireGuard encryption/decryption costs and network round-trip times.
+The pcap-based approach on BSD adds slightly more overhead than Linux's raw socket approach. This is due to additional abstraction layers and per-interface handling. However, this overhead is very small compared to WireGuard encryption/decryption costs and network round-trip times.
 
 \section{Related Work}
 
-NAT traversal has a rich history in peer-to-peer networking and VoIP applications. ICE (Interactive Connectivity Establishment, RFC 8445) provides a comprehensive framework combining STUN, TURN (Traversal Using Relays around NAT), and multiple candidate gathering strategies. WebRTC implementations rely heavily on ICE for establishing peer-to-peer media connections through NAT.
+NAT traversal has a long history in peer-to-peer networking and VoIP applications. ICE (Interactive Connectivity Establishment, RFC 8445) provides a complete framework. It combines STUN, TURN (Traversal Using Relays around NAT), and multiple candidate gathering strategies. WebRTC implementations rely heavily on ICE for establishing peer-to-peer media connections through NAT.
 
-The libp2p project, developed for IPFS and used in various blockchain projects, implements sophisticated NAT traversal including hole punching, relay protocols, and automatic fallback mechanisms. While comprehensive, libp2p's complexity exceeds the requirements for simple WireGuard endpoint discovery.
+The libp2p project was developed for IPFS. It is used in various blockchain projects. It has sophisticated NAT traversal including hole punching, relay protocols, and automatic fallback mechanisms. While complete, libp2p's complexity is more than needed for simple WireGuard endpoint discovery.
 
-Tailscale represents the most prominent commercial solution for WireGuard NAT traversal. Its DERP relay network provides reliable fallback when direct connectivity fails, and its coordination servers handle endpoint discovery and key distribution. Tailscale's architecture, embedding wireguard-go and adding extensive coordination infrastructure, targets ease-of-use for end users. STUNMESH-go targets network engineers and system administrators who prefer working directly with kernel WireGuard implementations and require flexibility in storage backends.
+Tailscale is the most well-known commercial solution for WireGuard NAT traversal. Its DERP relay network provides reliable fallback when direct connectivity fails. Its coordination servers handle endpoint discovery and key distribution. Tailscale's design embeds wireguard-go and adds extensive coordination infrastructure. It targets ease-of-use for end users. STUNMESH-go targets network engineers and system administrators. These users prefer working directly with kernel WireGuard and need flexibility in storage backends.
 
-ZeroTier takes a different architectural approach, implementing its own protocol rather than using WireGuard. While effective, this requires trusting ZeroTier's proprietary protocol implementation rather than leveraging WireGuard's extensively audited codebase.
+ZeroTier takes a different approach. It uses its own protocol rather than WireGuard. While effective, this requires trusting ZeroTier's proprietary protocol instead of using WireGuard's extensively audited codebase.
 
-In the BSD ecosystem, pfSense and OPNsense have traditionally relied on OpenVPN for VPN functionality due to its maturity and extensive feature set. WireGuard support in pfSense (via the kernel if-wg driver) and OPNsense has increased adoption, but NAT traversal solutions specifically for these platforms remained limited. This work enables BSD-based firewall administrators to deploy site-to-site WireGuard VPNs without requiring static IP addresses or manual port forwarding.
+In the BSD ecosystem, pfSense and OPNsense have traditionally used OpenVPN for VPN functionality. This is due to its maturity and extensive features. WireGuard support in pfSense (via the kernel if-wg driver) and OPNsense has increased adoption. However, NAT traversal solutions specifically for these platforms remained limited. This work enables BSD-based firewall administrators to deploy site-to-site WireGuard VPNs. They do not need static IP addresses or manual port forwarding.
 
-Academic work on NAT traversal includes extensive analysis of NAT behaviors, classification schemes, and success rates for various techniques. Studies consistently show that STUN-based approaches achieve high success rates (typically 80-90\%) for cone NAT types, with symmetric NAT remaining challenging. STUNMESH-go's focus on cone NAT support aligns with these findings, providing reliable connectivity for the majority of real-world NAT configurations.
+Academic work on NAT traversal includes extensive analysis of NAT behaviors, classification schemes, and success rates for various techniques. Studies consistently show that STUN-based approaches achieve high success rates (typically 80-90\%) for cone NAT types. Symmetric NAT remains challenging. STUNMESH-go's focus on cone NAT support matches these findings. It provides reliable connectivity for the majority of real-world NAT configurations.
 
 \section{Discussion and Future Work}
 
 \subsection{Lessons Learned}
 
-Porting STUNMESH-go to FreeBSD and macOS reinforced several important principles for cross-platform network programming:
+Moving STUNMESH-go to FreeBSD and macOS taught us several important principles for cross-platform network programming:
 
-\textbf{Abstract Early}: Identifying platform differences early and designing appropriate abstractions prevents extensive refactoring later. Build tags and interface-based designs enable clean platform-specific implementations.
+\textbf{Abstract Early}: Finding platform differences early and designing good abstractions prevents extensive refactoring later. Build tags and interface-based designs allow clean platform-specific code.
 
-\textbf{Test on Real Hardware}: Virtual machines are valuable, but testing on physical hardware with real network interfaces reveals edge cases. Different network interface drivers exhibit subtle behavioral differences.
+\textbf{Test on Real Hardware}: Virtual machines are useful, but testing on physical hardware with real network interfaces shows edge cases. Different network interface drivers have small behavioral differences.
 
-\textbf{Understand Platform History}: The architectural differences between Linux and BSD network stacks reflect different evolutionary paths. Linux's raw socket capabilities evolved to support system-wide packet capture, while BSD's BPF device approach maintains stricter interface isolation. Understanding this history explains why certain features exist or don't.
+\textbf{Understand Platform History}: The design differences between Linux and BSD network stacks reflect different development paths. Linux's raw socket capabilities evolved to support system-wide packet capture. BSD's BPF device approach keeps stricter interface isolation. Understanding this history explains why certain features exist or don't.
 
-\textbf{Documentation Matters}: Platform-specific behavior is often underdocumented. Community engagement with BSD users revealed platform-specific quirks that weren't apparent from reading documentation alone.
+\textbf{Documentation Matters}: Platform-specific behavior is often poorly documented. Working with BSD users showed platform-specific quirks that were not clear from reading documentation alone.
 
 \subsection{Limitations and Constraints}
 
-The current implementation has several known limitations:
+The current version has several known limitations:
 
-\textbf{Symmetric NAT}: Like most STUN-based approaches, STUNMESH-go struggles with symmetric NAT where both peers have symmetric configurations. Predicting port mappings in symmetric NAT scenarios requires additional techniques like repeated STUN queries or UDP hole-punching variations, which add complexity.
+\textbf{Symmetric NAT}: Like most STUN-based approaches, STUNMESH-go has trouble with symmetric NAT where both peers have symmetric configurations. Predicting port mappings in symmetric NAT scenarios needs additional techniques like repeated STUN queries or UDP hole-punching variations. These add complexity.
 
 \textbf{BSD ICMP Device Binding}: The absence of SO\_BINDTODEVICE on BSD platforms means ping monitoring cannot guarantee tunnel-specific health checks in complex multi-interface scenarios. Workarounds exist (policy routing, source address selection) but add configuration complexity.
 
-\textbf{Single STUN Server}: Current deployments typically configure one STUN server. Multiple STUN servers with failover would improve reliability, particularly for production deployments.
+\textbf{Single STUN Server}: Current deployments usually configure one STUN server. Multiple STUN servers with failover would improve reliability, especially for production use.
 
-\textbf{IPv6 Ping Monitoring}: Ping monitoring currently supports only IPv4 target addresses, even when the tunnel itself uses IPv6. Adding IPv6 ping support requires additional implementation work, particularly for BSD platforms where IPv6 ICMP differs from IPv4.
+\textbf{IPv6 Ping Monitoring}: Ping monitoring currently supports only IPv4 target addresses, even when the tunnel itself uses IPv6. Adding IPv6 ping support needs additional work, especially for BSD platforms where IPv6 ICMP differs from IPv4.
 
 \subsection{Future Directions}
 
-Several directions merit further exploration:
+Several areas need further exploration:
 
-\textbf{Enhanced BSD Device Binding}: Investigating BSD-specific mechanisms for interface-bound ICMP sockets could improve ping monitoring accuracy. Potential approaches include SO\_SETFIB (FreeBSD's FIB selection), source address selection via SO\_BINDANY, or integration with pf firewall rules.
+\textbf{Enhanced BSD Device Binding}: Investigating BSD-specific mechanisms for interface-bound ICMP sockets could improve ping monitoring accuracy. Possible approaches include SO\_SETFIB (FreeBSD's FIB selection), source address selection via SO\_BINDANY, or integration with pf firewall rules.
 
-\textbf{Symmetric NAT Strategies}: Implementing more sophisticated NAT traversal techniques like birthday paradox hole punching or coordinated port prediction could improve symmetric NAT success rates. This would require coordination between peers beyond simple endpoint exchange.
+\textbf{Symmetric NAT Strategies}: Using more sophisticated NAT traversal techniques could improve symmetric NAT success rates. These include birthday paradox hole punching or coordinated port prediction. This would need coordination between peers beyond simple endpoint exchange.
 
-\textbf{TURN Fallback}: Adding optional TURN relay support would provide connectivity when direct peer-to-peer connections fail. This could integrate with existing TURN server implementations while maintaining the preference for direct connections.
+\textbf{TURN Fallback}: Adding optional TURN relay support would provide connectivity when direct peer-to-peer connections fail. This could work with existing TURN server implementations while keeping the preference for direct connections.
 
 \textbf{Integration with BSD Firewalls}: Developing pfSense and OPNsense packages would simplify deployment on these platforms. Native GUI integration would make STUNMESH-go accessible to administrators who prefer web-based configuration over YAML files.
 
-\textbf{IPv6-Mostly Networks}: As IPv6 deployment increases, particularly in mobile networks, optimizing for IPv6-primary configurations becomes important. This includes better handling of IPv6-only peers and improved fallback strategies.
+\textbf{IPv6-Mostly Networks}: As IPv6 deployment increases, especially in mobile networks, optimizing for IPv6-primary configurations becomes important. This includes better handling of IPv6-only peers and improved fallback strategies.
 
-\textbf{Performance Optimization}: While current performance is adequate, several optimization opportunities exist: reducing per-packet processing overhead on BSD by optimizing BPF filter complexity, implementing more efficient packet batching, and exploring alternative packet capture libraries.
+\textbf{Performance Optimization}: While current performance is good enough, several optimization opportunities exist: reducing per-packet processing overhead on BSD by optimizing BPF filter complexity, using more efficient packet batching, and exploring alternative packet capture libraries.
 
 \subsection{Community Contributions}
 
-The BSD community has provided valuable feedback and contributions since the release of FreeBSD and macOS support. Community members reported issues with specific network interface drivers, helped identify problems with uncommon NAT configurations, and contributed documentation improvements.
+The BSD community has provided valuable feedback and contributions since the release of FreeBSD and macOS support. Community members reported issues with specific network interface drivers. They helped find problems with uncommon NAT configurations and contributed documentation improvements.
 
-Future work should emphasize continued community engagement, particularly with pfSense and OPNsense users whose production deployments reveal real-world issues that testing environments may miss.
+Future work should focus on continued community engagement, especially with pfSense and OPNsense users. Their production deployments show real-world issues that testing environments may miss.
 
 \section{Conclusion}
 
-This paper documented the technical challenges and solutions involved in porting STUNMESH-go, a WireGuard NAT traversal tool, from Linux to FreeBSD and macOS. The porting effort exposed fundamental differences in network programming interfaces across Unix-like systems, particularly regarding packet capture mechanisms, BPF implementations, and low-level socket capabilities.
+This paper documented the technical problems and solutions we found when moving STUNMESH-go from Linux to FreeBSD and macOS. STUNMESH-go is a WireGuard NAT traversal tool. The porting work showed basic differences in network programming interfaces across Unix-like systems. This was especially true for packet capture mechanisms, BPF implementations, and low-level socket capabilities.
 
-Key contributions include comprehensive documentation of platform-specific networking differences, practical implementation strategies using Go's build tag system and interface abstractions, and validation on production BSD-based firewall distributions. The resulting implementation enables FreeBSD systems, including pfSense and OPNsense deployments, to utilize direct peer-to-peer WireGuard connectivity without relay infrastructure.
+Key contributions include complete documentation of platform-specific networking differences, practical strategies using Go's build tag system and interface abstractions, and testing on production BSD-based firewall systems. The result enables FreeBSD systems, including pfSense and OPNsense deployments, to use direct peer-to-peer WireGuard connectivity without relay infrastructure.
 
-The experience reinforces the importance of early abstraction in cross-platform development and demonstrates that despite significant architectural differences, portable network code can achieve functionality parity across platforms with careful design. While limitations remain, particularly regarding BSD's lack of interface-bound ICMP sockets and challenges with symmetric NAT, the current implementation provides valuable functionality for the BSD networking community.
+The experience shows the importance of early abstraction in cross-platform development. Despite big design differences, portable network code can achieve the same functionality across platforms with careful design. While limitations remain, especially BSD's lack of interface-bound ICMP sockets and challenges with symmetric NAT, the current version provides valuable functionality for the BSD networking community.
 
-As WireGuard adoption continues growing in BSD environments, tools like STUNMESH-go become increasingly important for enabling flexible VPN deployments without static IP requirements. The open-source nature of this project encourages community contributions to address remaining limitations and extend functionality for new use cases.
+As WireGuard adoption continues growing in BSD environments, tools like STUNMESH-go become more important for flexible VPN deployments without static IP requirements. The open-source nature of this project encourages community contributions to address remaining limitations and add functionality for new use cases.
 
-The complete implementation is available under the GPLv2 license at \url{https://github.com/tjjh89017/stunmesh-go}, welcoming contributions from the BSD and broader networking community.
+The complete code is available under the GPLv2 license at \url{https://github.com/tjjh89017/stunmesh-go}. We welcome contributions from the BSD and broader networking community.
 
 \section*{Acknowledgments}
 
-The author thanks the FreeBSD and macOS communities for testing and feedback, the OPNsense development team for platform support, and the WireGuard developers for creating an exceptional VPN protocol. Special thanks to the authors of the pcap library and wgctrl library, which provided essential building blocks for cross-platform packet capture and WireGuard control.
+The author thanks the FreeBSD and macOS communities for testing and feedback. Thanks also to the OPNsense development team for platform support, and the WireGuard developers for creating an excellent VPN protocol. Special thanks to the authors of the pcap library and wgctrl library. These provided essential tools for cross-platform packet capture and WireGuard control.
 
 \begin{thebibliography}{00}
 \bibitem{b1} J. Donenfeld, ``WireGuard: Next Generation Kernel Network Tunnel,'' in Proceedings of NDSS 2017, 2017.
