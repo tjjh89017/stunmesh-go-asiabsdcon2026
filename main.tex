@@ -230,7 +230,7 @@ err = syscall.SetsockoptString(fd,
 
 This ensures ICMP Echo requests go through the intended WireGuard tunnel instead of the default route. Without this binding, pings might wrongly use the primary network interface. This means they would not detect tunnel-specific failures.
 
-FreeBSD and macOS do not have SO\_BINDTODEVICE. Workarounds exist (changing routing tables, using SO\_DONTROUTE). However, these add complexity and can cause race conditions. The current BSD version creates standard ICMP connections without device binding. We accept this limitation for the initial release:
+FreeBSD and macOS lack VRF (Virtual Routing and Forwarding) support. In a single routing table environment without VRF, device binding is not necessary for ICMP sockets. The routing table itself determines which interface to use based on the destination address. The current BSD version creates standard ICMP connections without device binding, relying on correct routing configuration:
 
 \begin{lstlisting}[language=Go]
 // BSD: standard ICMP, no device binding
@@ -243,9 +243,9 @@ For setups where routing is configured correctly to send traffic to the WireGuar
 
 \subsection{WireGuard API Differences}
 
-The wgctrl library simplifies WireGuard userspace API access across platforms. However, platforms behave differently when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state.
+The wgctrl library \cite{b15} simplifies WireGuard userspace API access across platforms. However, platforms behave differently when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state.
 
-FreeBSD's WireGuard version (kernel version) needs a different approach. The STUNMESH-go code sets \texttt{UpdateOnly = false} for FreeBSD. This allows the library to remove and re-add peers if necessary:
+FreeBSD's kernel WireGuard implementation does not yet support the UpdateOnly feature. The wgctrl-go library returns \texttt{ErrUpdateOnlyNotSupported} when this flag is set on FreeBSD. The STUNMESH-go code sets \texttt{UpdateOnly = false} for FreeBSD. This allows the library to remove and re-add peers if necessary:
 
 \begin{lstlisting}[language=Go]
 //go:build freebsd
@@ -267,17 +267,9 @@ const (
 
 macOS uses wireguard-go (the Go userspace version). It supports update-only mode similar to Linux kernel WireGuard.
 
-\subsection{IPv6 Checksum Requirements}
-
-IPv6 has mandatory checksum requirements that differ from IPv4. RFC 8200 says that IPv6 UDP checksums are mandatory. In IPv4, they are optional. When building raw IPv6 UDP packets, the kernel must calculate checksums.
-
-The Go \texttt{ipv6.PacketConn} type provides \texttt{SetChecksum(true, 6)}. This enables kernel checksum calculation. The offset 6 indicates the UDP checksum field's position in the UDP header. This detail is important. Without correct checksum handling, STUN servers reject broken packets.
-
-Also, when sending packets through raw IPv6 sockets, addresses must use \texttt{net.IPAddr} instead of \texttt{net.UDPAddr}. This small difference exists because raw sockets send complete packets including UDP headers. \texttt{net.UDPAddr} means the kernel should build UDP headers.
-
 \subsection{CGO and Build Configuration}
 
-FreeBSD's BPF implementation needs CGO (Go's foreign function interface) for some low-level operations. The build system must turn on CGO for FreeBSD. It keeps it off for Linux and macOS to create static binaries:
+FreeBSD's wgctrl implementation requires CGO (Go's foreign function interface) for WireGuard kernel module interaction. The build system must turn on CGO for FreeBSD. It keeps it off for Linux and macOS to create static binaries:
 
 \begin{lstlisting}
 # Makefile excerpt
@@ -465,45 +457,6 @@ func (c *ICMPConn) Close() error
 
 The Linux version creates raw ICMP sockets and uses SO\_BINDTODEVICE. The BSD version uses the standard \texttt{icmp.ListenPacket} without device binding. It accepts the deviceName parameter but ignores it.
 
-\subsection{IPv6 Support}
-
-Both platforms now support IPv6 STUN discovery and dual-stack setups. The code handles IPv6-specific requirements:
-
-\begin{lstlisting}[language=Go]
-if s.protocol == "ipv6" {
-    conn6 := ipv6.NewPacketConn(c)
-    // Enable kernel UDP checksum calculation
-    if err := conn6.SetChecksum(true, 6); err != nil {
-        return err
-    }
-    s.conn6 = conn6
-}
-\end{lstlisting}
-
-When sending IPv6 UDP packets, the code converts \texttt{net.UDPAddr} to \texttt{net.IPAddr}:
-
-\begin{lstlisting}[language=Go]
-destAddr := addr
-if udpAddr, ok := addr.(*net.UDPAddr); ok {
-    destAddr = &net.IPAddr{
-        IP:   udpAddr.IP,
-        Zone: udpAddr.Zone,
-    }
-}
-\end{lstlisting}
-
-This ensures correct behavior with raw IPv6 sockets where the application builds complete UDP packets.
-
-\subsection{Protocol Configuration}
-
-The code supports two-level protocol configuration:
-
-\textbf{Interface Protocol} decides which STUN discoveries to perform (ipv4, ipv6, or dualstack). A dualstack configuration performs both IPv4 and IPv6 STUN discovery and stores both endpoints.
-
-\textbf{Peer Protocol} decides which endpoint to use (ipv4, ipv6, prefer\_ipv4, or prefer\_ipv6). The prefer options enable fallback behavior. They select the preferred protocol if available, otherwise use the alternative.
-
-This design works well in mixed environments. Some peers may have only IPv4 connectivity while others support IPv6. Administrators can optimize endpoint selection for each peer.
-
 \section{Testing and Validation}
 
 We tested the ported version on multiple platforms and scenarios to ensure it works correctly in real-world conditions.
@@ -673,6 +626,7 @@ The author thanks the FreeBSD and macOS communities for testing and feedback. Th
 \bibitem{b12} D. Bernstein et al., ``The Poly1305-AES message-authentication code,'' in FSE 2005, LNCS 3557, pp. 32-49, 2005.
 \bibitem{b13} Gravitl, ``Netmaker: WireGuard Automation Platform,'' \url{https://github.com/gravitl/netmaker}, 2025.
 \bibitem{b14} M. Schölling, ``wireguard-p2p: A tool for setting up WireGuard connections from peer to peer,'' \url{https://github.com/manuels/wireguard-p2p}, 2017.
+\bibitem{b15} WireGuard Project, ``wgctrl-go: Package wgctrl enables control of WireGuard interfaces on multiple platforms,'' \url{https://github.com/WireGuard/wgctrl-go}, 2025.
 \end{thebibliography}
 
 \end{document}
