@@ -41,7 +41,7 @@ Network Address Translation (NAT) and Carrier-Grade NAT (CGNAT) are very common 
 
 STUNMESH-go solves this problem. It uses the STUN protocol (Session Traversal Utilities for NAT) to find network endpoints. It shares the same UDP port for both STUN and WireGuard traffic. This method allows direct peer-to-peer WireGuard connections. It works through Full-Cone, Restricted-Cone, and Port-Restricted-Cone NAT types. It does not need relay servers. STUNMESH-go works directly with the WireGuard kernel module or wireguard-go. It does not use proxy layers. This means it has lower overhead than solutions like Tailscale.
 
-The original version was built for Linux systems. It used Linux-specific features like raw IP sockets with system-wide Berkeley Packet Filter (BPF) and the SO\_BINDTODEVICE socket option. Linux is very popular for servers and embedded networks. However, FreeBSD-based systems run network infrastructure around the world. pfSense \cite{b10} and OPNsense \cite{b11} are two popular open-source firewall systems built on FreeBSD. They are used in thousands of business and home networks. Also, macOS is an important platform for network engineers and developers who work with BSD systems.
+The original version was built for Linux systems. It used Linux-specific features like raw IP sockets with system-wide Berkeley Packet Filter (BPF) and the SO\_BINDTODEVICE socket option. Linux is very popular for servers and embedded networks. However, FreeBSD-based systems run network infrastructure around the world. pfSense \cite{b1} and OPNsense \cite{b2} are two popular open-source firewall systems built on FreeBSD. They are used in thousands of business and home networks. Also, macOS is an important platform for network engineers and developers who work with BSD systems.
 
 Moving STUNMESH-go to FreeBSD and macOS showed us big differences in how these systems work. These differences exist at many levels: how they capture packets, how BPF works, how raw sockets behave, how ICMP sockets work, and how system calls work. Also, WireGuard itself works differently on each platform. We had to handle these differences carefully.
 
@@ -55,13 +55,13 @@ This paper makes the following contributions:
 \item Open-source code that is available for the BSD community and network engineers.
 \end{itemize}
 
-The rest of this paper is organized as follows: Section II gives background on STUN, WireGuard, and existing NAT traversal solutions. Section III describes the original Linux design. Section IV explains the platform-specific problems we found during porting. Section V presents our solutions. Section VI discusses our testing methods and results. Section VII reviews related work. Section VIII concludes with future work.
+The rest of this paper is organized as follows: Section II gives background on STUN, WireGuard, and existing NAT traversal solutions. Section III describes the original Linux design. Section IV explains the platform-specific problems we found during porting. Section V presents our solutions. Section VI discusses our testing methods and results. Section VII concludes with limitations and future work.
 
 \section{Background}
 
 \subsection{WireGuard and NAT Challenges}
 
-WireGuard is a modern VPN protocol. It is designed to be simple, fast, and secure. Traditional VPN solutions like IPsec work at Layer 3. OpenVPN requires complex handshaking. WireGuard uses a simpler approach. It uses Curve25519 for key exchange, ChaCha20 for encryption, and Poly1305 for authentication. The code is small (about 4,000 lines). This makes it easy to check and maintain.
+WireGuard \cite{b3} is a modern VPN protocol. It is designed to be simple, fast, and secure. Traditional VPN solutions like IPsec work at Layer 3. OpenVPN requires complex handshaking. WireGuard uses a simpler approach. It uses Curve25519 for key exchange, ChaCha20 for encryption, and Poly1305 for authentication. The code is small (about 4,000 lines). This makes it easy to check and maintain.
 
 However, WireGuard's design assumes that at least one side has a stable, reachable endpoint. When both sides are behind NAT or CGNAT, neither can start connections to the other. NAT devices usually only allow inbound packets that match existing outbound connections. This creates a deadlock where neither side can reach the other without help from outside.
 
@@ -81,7 +81,7 @@ STUNMESH-go enables direct peer-to-peer connections in various NAT scenarios. Wh
 
 \subsection{STUN Protocol}
 
-Session Traversal Utilities for NAT (STUN) is defined in RFC 5389. It helps computers discover their public IP address and port. A STUN client sends a request to a STUN server. The server responds with the source address and port where it received the request from. This information shows the client's public endpoint after NAT translation.
+Session Traversal Utilities for NAT (STUN) \cite{b5} is defined in RFC 5389. It helps computers discover their public IP address and port. A STUN client sends a request to a STUN server. The server responds with the source address and port where it received the request from. This information shows the client's public endpoint after NAT translation.
 
 STUN allows peers to discover their external endpoints and share this information. Once both peers know each other's public endpoints, they can attempt direct connections. For cone NAT types, this enables successful peer-to-peer communication without relay servers.
 
@@ -89,11 +89,11 @@ STUN allows peers to discover their external endpoints and share this informatio
 
 Several solutions exist for WireGuard NAT traversal. Each has different strengths and weaknesses:
 
-\textbf{Tailscale} \cite{b8} embeds a modified version of wireguard-go (the Go userspace implementation of WireGuard) in its application. It modifies wireguard-go to integrate STUN-based NAT traversal and DERP (Designated Encrypted Relay for Packets) relay servers when direct connections fail. Tailscale is easy to use and works well with NAT. However, it requires coordination servers (either Tailscale's hosted service or self-hosted Headscale) and cannot use kernel WireGuard modules directly.
+\textbf{Tailscale} \cite{b6} embeds a modified version of wireguard-go (the Go userspace implementation of WireGuard) in its application. It modifies wireguard-go to integrate STUN-based NAT traversal and DERP (Designated Encrypted Relay for Packets) relay servers when direct connections fail. Tailscale is easy to use and works well with NAT. However, it requires coordination servers (either Tailscale's hosted service or self-hosted Headscale) and cannot use kernel WireGuard modules directly.
 
-\textbf{Netmaker} \cite{b13} focuses on mesh networking and uses a client-server architecture. The Netclient agent configures kernel WireGuard on managed nodes. However, Netmaker requires a coordination server with a public static IP address and open firewall ports for node communication. This adds deployment complexity and infrastructure requirements compared to solutions that only need access to public STUN servers.
+\textbf{Netmaker} \cite{b7} focuses on mesh networking and uses a client-server architecture. The Netclient agent configures kernel WireGuard on managed nodes. However, Netmaker requires a coordination server with a public static IP address and open firewall ports for node communication. This adds deployment complexity and infrastructure requirements compared to solutions that only need access to public STUN servers.
 
-\textbf{wireguard-p2p} \cite{b14} by Manuel Schölling inspired STUNMESH-go's design. It uses STUN for NAT traversal and OpenDHT for endpoint exchange. However, it did not have enough flexibility for production use. It had limitations with storage backends and multi-peer scenarios.
+\textbf{wireguard-p2p} \cite{b8} by Manuel Schölling inspired STUNMESH-go's design. It uses STUN for NAT traversal and OpenDHT for endpoint exchange. However, it did not have enough flexibility for production use. It had limitations with storage backends and multi-peer scenarios.
 
 STUNMESH-go is different because it works directly with kernel WireGuard. It avoids the overhead of embedded Go versions. It provides a flexible plugin system for endpoint storage. This supports many backends from simple file storage to DNS TXT records in Cloudflare.
 
@@ -117,7 +117,7 @@ STUNMESH-go has a flexible plugin system. It supports three plugin types: built-
 
 \subsection{STUN Implementation on Linux}
 
-The Linux STUN implementation is the most advanced part of STUNMESH-go. It creates raw IP sockets (using \texttt{net.ListenPacket("ip4:17", "0.0.0.0")} for IPv4). These bypass the kernel's UDP socket handling. This allows the application to build complete UDP packets including headers. Berkeley Packet Filter (BPF) programs filter incoming traffic. They capture only STUN responses for the WireGuard port.
+The Linux STUN implementation is the most advanced part of STUNMESH-go. It creates raw IP sockets (using \texttt{net.ListenPacket("ip4:17", "0.0.0.0")} for IPv4). These bypass the kernel's UDP socket handling. This allows the application to build complete UDP packets including headers. Berkeley Packet Filter (BPF) \cite{b9} programs filter incoming traffic. They capture only STUN responses for the WireGuard port.
 
 The key idea that makes port sharing work is this: raw sockets receive packets before the kernel's UDP stack processes them. The BPF filter checks the destination port and STUN magic cookie (0x2112A442). It identifies STUN responses and passes only relevant packets to the application. Normal WireGuard traffic reaches the kernel WireGuard module without any problems.
 
@@ -243,7 +243,7 @@ For setups where routing is configured correctly to send traffic to the WireGuar
 
 \subsection{WireGuard API Differences}
 
-The wgctrl library \cite{b15} simplifies WireGuard userspace API access across platforms. However, platforms behave differently when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state.
+The wgctrl library \cite{b10} simplifies WireGuard userspace API access across platforms. However, platforms behave differently when updating peer configurations. Linux WireGuard allows updating existing peer endpoints without removing and re-adding peers (UpdateOnly mode). This provides atomic updates without disrupting the connection state.
 
 FreeBSD's kernel WireGuard implementation does not yet support the UpdateOnly feature. The wgctrl-go library returns \texttt{ErrUpdateOnlyNotSupported} when this flag is set on FreeBSD. The STUNMESH-go code sets \texttt{UpdateOnly = false} for FreeBSD. This allows the library to remove and re-add peers if necessary:
 
@@ -528,7 +528,7 @@ The current version has several known limitations:
 
 \textbf{Symmetric NAT}: Like most STUN-based approaches, STUNMESH-go has trouble with symmetric NAT where both peers have symmetric configurations. Predicting port mappings in symmetric NAT scenarios needs additional techniques like repeated STUN queries or UDP hole-punching variations. These add complexity.
 
-\textbf{BSD ICMP Device Binding}: The absence of SO\_BINDTODEVICE on BSD platforms means ping monitoring cannot guarantee tunnel-specific health checks in complex multi-interface scenarios. Workarounds exist (policy routing, source address selection) but add configuration complexity.
+\textbf{BSD ICMP Health Checks}: Without SO\_BINDTODEVICE support, BSD platforms rely on routing tables to direct ICMP ping traffic through WireGuard tunnels. This works well in typical single-WAN scenarios but may require additional routing configuration in complex multi-path setups.
 
 \textbf{Single STUN Server}: Current deployments usually configure one STUN server. Multiple STUN servers with failover would improve reliability, especially for production use.
 
@@ -557,21 +557,16 @@ The complete code is available under the GPLv2 or later license at \url{https://
 The author thanks the FreeBSD and macOS communities for testing and feedback. Thanks also to the WireGuard developers for creating an excellent VPN protocol. Special thanks to the authors of the go-pcap library and wgctrl library. These provided essential tools for cross-platform packet capture and WireGuard control.
 
 \begin{thebibliography}{00}
-\bibitem{b1} J. Donenfeld, ``WireGuard: Next Generation Kernel Network Tunnel,'' in Proceedings of NDSS 2017, 2017.
-\bibitem{b2} J. Rosenberg et al., ``Session Traversal Utilities for NAT (STUN),'' RFC 5389, October 2008.
-\bibitem{b3} S. McCanne and V. Jacobson, ``The BSD Packet Filter: A New Architecture for User-level Packet Capture,'' in Proceedings of the USENIX Winter 1993 Conference, 1993.
+\bibitem{b1} pfSense Project, ``pfSense Documentation,'' \url{https://docs.netgate.com/pfsense/}, 2025.
+\bibitem{b2} OPNsense Project, ``OPNsense Documentation,'' \url{https://docs.opnsense.org/}, 2025.
+\bibitem{b3} J. Donenfeld, ``WireGuard: Next Generation Kernel Network Tunnel,'' in Proceedings of NDSS 2017, 2017.
 \bibitem{b4} F. Audet and C. Jennings, ``Network Address Translation (NAT) Behavioral Requirements for Unicast UDP,'' RFC 4787, January 2007.
-\bibitem{b5} A. Keranen et al., ``Interactive Connectivity Establishment (ICE): A Protocol for Network Address Translator (NAT) Traversal,'' RFC 8445, July 2018.
-\bibitem{b6} FreeBSD Project, ``if\_wg - WireGuard network interface,'' FreeBSD Manual Pages, 2023.
-\bibitem{b7} S. Deering and R. Hinden, ``Internet Protocol, Version 6 (IPv6) Specification,'' RFC 8200, July 2017.
-\bibitem{b8} Tailscale Inc., ``How Tailscale Works,'' \url{https://tailscale.com/blog/how-tailscale-works/}, 2023.
-\bibitem{b9} M. Krasnyansky, ``Universal TUN/TAP device driver,'' Linux Kernel Documentation, 2002.
-\bibitem{b10} pfSense Project, ``pfSense Documentation,'' \url{https://docs.netgate.com/pfsense/}, 2025.
-\bibitem{b11} OPNsense Project, ``OPNsense Documentation,'' \url{https://docs.opnsense.org/}, 2025.
-\bibitem{b12} D. Bernstein et al., ``The Poly1305-AES message-authentication code,'' in FSE 2005, LNCS 3557, pp. 32-49, 2005.
-\bibitem{b13} Gravitl, ``Netmaker: WireGuard Automation Platform,'' \url{https://github.com/gravitl/netmaker}, 2025.
-\bibitem{b14} M. Schölling, ``wireguard-p2p: A tool for setting up WireGuard connections from peer to peer,'' \url{https://github.com/manuels/wireguard-p2p}, 2017.
-\bibitem{b15} WireGuard Project, ``wgctrl-go: Package wgctrl enables control of WireGuard interfaces on multiple platforms,'' \url{https://github.com/WireGuard/wgctrl-go}, 2025.
+\bibitem{b5} J. Rosenberg et al., ``Session Traversal Utilities for NAT (STUN),'' RFC 5389, October 2008.
+\bibitem{b6} Tailscale Inc., ``How Tailscale Works,'' \url{https://tailscale.com/blog/how-tailscale-works/}, 2023.
+\bibitem{b7} Gravitl, ``Netmaker: WireGuard Automation Platform,'' \url{https://github.com/gravitl/netmaker}, 2025.
+\bibitem{b8} M. Schölling, ``wireguard-p2p: A tool for setting up WireGuard connections from peer to peer,'' \url{https://github.com/manuels/wireguard-p2p}, 2017.
+\bibitem{b9} S. McCanne and V. Jacobson, ``The BSD Packet Filter: A New Architecture for User-level Packet Capture,'' in Proceedings of the USENIX Winter 1993 Conference, 1993.
+\bibitem{b10} WireGuard Project, ``wgctrl-go: Package wgctrl enables control of WireGuard interfaces on multiple platforms,'' \url{https://github.com/WireGuard/wgctrl-go}, 2025.
 \end{thebibliography}
 
 \end{document}
