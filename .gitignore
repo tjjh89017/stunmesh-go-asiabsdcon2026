@@ -1,0 +1,48 @@
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.fot
+*.cb
+*.cb2
+*.lb
+*.nav
+*.snm
+*.vrb
+*.xdv
+
+# LaTeX temporary files
+*.bak
+*~
+*.swp
+*.swo
+*-blx.bib
+
+# PDF output (remove this line if you want to version control PDFs)
+*.pdf
+
+# Font related
+missfont.log
+*.pfb
+*.tfm
+
+# Temporary directories
+tmp/
+_minted-*/
+svg-inkscape/
+
+# Editor files
+.DS_Store
+.vscode/
+.idea/
+*.sublime-*
