@@ -38,9 +38,13 @@ STUN, CGNAT, peer-to-peer, WireGuard, Go, FreeBSD, macOS, BPF, packet filtering,
 \section{Introduction}
 
 Network Address Translation (NAT) and Carrier-Grade NAT (CGNAT) are very common in modern networks. They help save IPv4 addresses. However, they create problems for peer-to-peer communication. Virtual Private Network (VPN) solutions like WireGuard are fast and secure. But they have trouble making direct connections when both users are behind NAT or CGNAT. Traditional solutions use central relay servers. These servers add delay, cost more bandwidth, and can fail.
+
 STUNMESH-go solves this problem. It uses the STUN protocol (Session Traversal Utilities for NAT) to find network endpoints. It shares the same UDP port for both STUN and WireGuard traffic. This method allows direct peer-to-peer WireGuard connections. It works through Full-Cone, Restricted-Cone, and Port-Restricted-Cone NAT types. It does not need relay servers. STUNMESH-go works directly with the WireGuard kernel module. It does not use wireguard-go with proxy layers. This means it has lower overhead and better performance than solutions like Tailscale.
+
 The original version was built for Linux systems. It used Linux-specific features like raw IP sockets with system-wide Berkeley Packet Filter (BPF) and the SO\_BINDTODEVICE socket option. Linux is very popular for servers and embedded networks. However, FreeBSD-based systems run important network infrastructure around the world. pfSense and OPNsense are two popular open-source firewall systems built on FreeBSD. They are used in thousands of business and home networks. Also, macOS is an important platform for network engineers and developers who work with BSD systems.
+
 Moving STUNMESH-go to FreeBSD and macOS showed us big differences in how these systems work. These differences exist at many levels: how they capture packets, how BPF works, how raw sockets behave, how ICMP sockets work, and how system calls work. Also, WireGuard itself works differently on each platform. We had to handle these differences carefully.
+
 This paper makes the following contributions:
 
 \begin{itemize}
