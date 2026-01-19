@@ -487,10 +487,12 @@ BSD testing specifically checked correct BPF filter operation across different i
 Packet captures confirmed that BPF filters correctly matched STUN responses regardless of link layer type.
 
 \subsubsection{Multi-Interface Scenarios}
+
 OPNsense deployments usually have multiple interfaces (WAN, LAN, DMZ, etc.). Testing confirmed that STUNMESH-go correctly:
+
 \begin{itemize}
 \item Excludes the WireGuard interface from STUN listening
-\item Captures STUN responses on the right WAN interface
+\item Captures STUN responses on the right interface
 \item Handles interface state changes (interfaces going up/down)
 \end{itemize}
 
@@ -500,9 +502,9 @@ Dual-stack testing checked IPv6 STUN discovery functionality. Networks with nati
 \subsubsection{NAT Type Coverage}
 Testing included multiple NAT configurations:
 \begin{itemize}
-\item Full-Cone NAT (home routers): Successful bidirectional connectivity
-\item Port-Restricted-Cone NAT (enterprise firewalls): Successful connectivity after handshake
-\item CGNAT (mobile carriers): Successful connectivity when at least one peer had cone NAT
+\item Full-Cone NAT (home routers): Bidirectional connectivity established
+\item Port-Restricted-Cone NAT (enterprise firewalls): Connectivity established after initial handshake
+\item CGNAT (mobile carriers): Connectivity achieved when at least one peer uses cone NAT
 \end{itemize}
 
 Symmetric NAT scenarios were challenging, as expected. This is due to unpredictable port mapping behavior.
@@ -518,48 +520,7 @@ The ping monitoring system went through extensive testing to check tunnel health
 \item \textbf{Adaptive Backoff}: Confirmed that retry intervals follow the configured pattern (fixed intervals, then longer progression)
 \end{itemize}
 
-The BSD limitation with no SO\_BINDTODEVICE has little impact in typical setups where routing tables correctly send traffic through WireGuard tunnels. However, complex multi-path scenarios may need additional routing configuration.
-
-\subsection{Performance Considerations}
-
-We did not focus on detailed performance testing (latency, throughput). However, observational testing showed that the BSD version performs similarly to Linux:
-
-\begin{itemize}
-\item STUN discovery completes within typical timeframes (1-2 seconds)
-\item WireGuard tunnel establishment happens within one or two refresh intervals as expected
-\item Ping monitoring adds very little overhead
-\item Multiple concurrent tunnels work without running out of resources
-\end{itemize}
-
-The pcap-based approach on BSD adds slightly more overhead than Linux's raw socket approach. This is due to additional abstraction layers and per-interface handling. However, this overhead is very small compared to WireGuard encryption/decryption costs and network round-trip times.
-
-\section{Related Work}
-
-NAT traversal has a long history in peer-to-peer networking and VoIP applications. ICE (Interactive Connectivity Establishment, RFC 8445) provides a complete framework. It combines STUN, TURN (Traversal Using Relays around NAT), and multiple candidate gathering strategies. WebRTC implementations rely heavily on ICE for establishing peer-to-peer media connections through NAT.
-
-The libp2p project was developed for IPFS. It is used in various blockchain projects. It has sophisticated NAT traversal including hole punching, relay protocols, and automatic fallback mechanisms. While complete, libp2p's complexity is more than needed for simple WireGuard endpoint discovery.
-
-Tailscale is the most well-known commercial solution for WireGuard NAT traversal. Its DERP relay network provides reliable fallback when direct connectivity fails. Its coordination servers handle endpoint discovery and key distribution. Tailscale's design embeds wireguard-go and adds extensive coordination infrastructure. It targets ease-of-use for end users. STUNMESH-go targets network engineers and system administrators. These users prefer working directly with kernel WireGuard and need flexibility in storage backends.
-
-ZeroTier takes a different approach. It uses its own protocol rather than WireGuard. While effective, this requires trusting ZeroTier's proprietary protocol instead of using WireGuard's extensively audited codebase.
-
-In the BSD ecosystem, pfSense and OPNsense have traditionally used OpenVPN for VPN functionality. This is due to its maturity and extensive features. WireGuard support in pfSense (via the kernel if-wg driver) and OPNsense has increased adoption. However, NAT traversal solutions specifically for these platforms remained limited. This work enables BSD-based firewall administrators to deploy site-to-site WireGuard VPNs. They do not need static IP addresses or manual port forwarding.
-
-Academic work on NAT traversal includes extensive analysis of NAT behaviors, classification schemes, and success rates for various techniques. Studies consistently show that STUN-based approaches achieve high success rates (typically 80-90\%) for cone NAT types. Symmetric NAT remains challenging. STUNMESH-go's focus on cone NAT support matches these findings. It provides reliable connectivity for the majority of real-world NAT configurations.
-
 \section{Discussion and Future Work}
-
-\subsection{Lessons Learned}
-
-Moving STUNMESH-go to FreeBSD and macOS taught us several important principles for cross-platform network programming:
-
-\textbf{Abstract Early}: Finding platform differences early and designing good abstractions prevents extensive refactoring later. Build tags and interface-based designs allow clean platform-specific code.
-
-\textbf{Test on Real Hardware}: Virtual machines are useful, but testing on physical hardware with real network interfaces shows edge cases. Different network interface drivers have small behavioral differences.
-
-\textbf{Understand Platform History}: The design differences between Linux and BSD network stacks reflect different development paths. Linux's raw socket capabilities evolved to support system-wide packet capture. BSD's BPF device approach keeps stricter interface isolation. Understanding this history explains why certain features exist or don't.
-
-\textbf{Documentation Matters}: Platform-specific behavior is often poorly documented. Working with BSD users showed platform-specific quirks that were not clear from reading documentation alone.
 
 \subsection{Limitations and Constraints}
 
@@ -577,23 +538,7 @@ The current version has several known limitations:
 
 Several areas need further exploration:
 
-\textbf{Enhanced BSD Device Binding}: Investigating BSD-specific mechanisms for interface-bound ICMP sockets could improve ping monitoring accuracy. Possible approaches include SO\_SETFIB (FreeBSD's FIB selection), source address selection via SO\_BINDANY, or integration with pf firewall rules.
-
-\textbf{Symmetric NAT Strategies}: Using more sophisticated NAT traversal techniques could improve symmetric NAT success rates. These include birthday paradox hole punching or coordinated port prediction. This would need coordination between peers beyond simple endpoint exchange.
-
-\textbf{TURN Fallback}: Adding optional TURN relay support would provide connectivity when direct peer-to-peer connections fail. This could work with existing TURN server implementations while keeping the preference for direct connections.
-
-\textbf{Integration with BSD Firewalls}: Developing pfSense and OPNsense packages would simplify deployment on these platforms. Native GUI integration would make STUNMESH-go accessible to administrators who prefer web-based configuration over YAML files.
-
-\textbf{IPv6-Mostly Networks}: As IPv6 deployment increases, especially in mobile networks, optimizing for IPv6-primary configurations becomes important. This includes better handling of IPv6-only peers and improved fallback strategies.
-
 \textbf{Performance Optimization}: While current performance is good enough, several optimization opportunities exist: reducing per-packet processing overhead on BSD by optimizing BPF filter complexity, using more efficient packet batching, and exploring alternative packet capture libraries.
-
-\subsection{Community Contributions}
-
-The BSD community has provided valuable feedback and contributions since the release of FreeBSD and macOS support. Community members reported issues with specific network interface drivers. They helped find problems with uncommon NAT configurations and contributed documentation improvements.
-
-Future work should focus on continued community engagement, especially with pfSense and OPNsense users. Their production deployments show real-world issues that testing environments may miss.
 
 \section{Conclusion}
 
@@ -605,11 +550,11 @@ The experience shows the importance of early abstraction in cross-platform devel
 
 As WireGuard adoption continues growing in BSD environments, tools like STUNMESH-go become more important for flexible VPN deployments without static IP requirements. The open-source nature of this project encourages community contributions to address remaining limitations and add functionality for new use cases.
 
-The complete code is available under the GPLv2 license at \url{https://github.com/tjjh89017/stunmesh-go}. We welcome contributions from the BSD and broader networking community.
+The complete code is available under the GPLv2 or later license at \url{https://github.com/tjjh89017/stunmesh-go}. We welcome contributions from the BSD and broader networking community.
 
 \section*{Acknowledgments}
 
-The author thanks the FreeBSD and macOS communities for testing and feedback. Thanks also to the OPNsense development team for platform support, and the WireGuard developers for creating an excellent VPN protocol. Special thanks to the authors of the pcap library and wgctrl library. These provided essential tools for cross-platform packet capture and WireGuard control.
+The author thanks the FreeBSD and macOS communities for testing and feedback. Thanks also to the WireGuard developers for creating an excellent VPN protocol. Special thanks to the authors of the go-pcap library and wgctrl library. These provided essential tools for cross-platform packet capture and WireGuard control.
 
 \begin{thebibliography}{00}
 \bibitem{b1} J. Donenfeld, ``WireGuard: Next Generation Kernel Network Tunnel,'' in Proceedings of NDSS 2017, 2017.
