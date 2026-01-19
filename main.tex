@@ -107,9 +107,9 @@ Understanding the original Linux version is important. It helps explain the port
 
 \textbf{Publish Controller} performs STUN discovery to find the device's public endpoint. It binds to the same UDP port that WireGuard uses. It sends STUN binding requests and receives responses. These responses show the NAT-translated address and port. The discovered endpoint is encrypted using NaCl box (Curve25519 + XSalsa20 + Poly1305). It is then stored using configured plugins.
 
-\textbf{Establish Controller} gets peer endpoints from storage and decrypts them. It configures WireGuard peer settings using wgctrl library calls. This controller handles the WireGuard API interaction. It updates peer endpoints when they change.
+\textbf{Establish Controller} gets peer endpoints from storage plugins and decrypts them. It configures WireGuard peer settings using wgctrl library calls. This controller handles the WireGuard API interaction. It updates peer endpoints when they change.
 
-\textbf{Refresh Controller} manages periodic re-discovery and updates. It runs at a configured interval (usually 60 seconds). This ensures endpoints stay current as network conditions change.
+\textbf{Refresh Controller} triggers periodic updates by requesting the Publish Controller to re-discover endpoints and the Establish Controller to refresh peer configurations. It runs at a configured interval. This ensures endpoints stay current as network conditions change.
 
 \subsection{Plugin Architecture}
 
