@@ -83,30 +83,22 @@ AsiaBSDCon 2026
 4. **Porting to FreeBSD** — What broke and why
 5. **BSD-Specific Solutions** — BPF devices, packet capture, ICMP, wgctrl
 6. **FreeBSD & OPNsense Testing** — Real-world validation
-7. **Lessons for BSD Developers** — Cross-platform patterns in Go
-8. **Future Work & Q&A**
+7. **Future Work & Q&A**
 
 ---
 
 # Why This Talk Matters for BSD
 
-- **pfSense** and **OPNsense** run on FreeBSD
-  - Thousands of enterprise and home firewall deployments
-- WireGuard is now in the **FreeBSD kernel** (if-wg driver)
-- But NAT traversal tools have been **Linux-only**
-- This work brings **direct P2P WireGuard** to FreeBSD
-  - No relay servers, no extra infrastructure
-- Also: a case study in **porting Linux network code to BSD**
+- **pfSense** and **OPNsense** run on FreeBSD — thousands of firewall deployments
+- WireGuard is in the **FreeBSD kernel** (if-wg), but NAT traversal tools have been **Linux-only**
+- This work brings **direct P2P WireGuard** to FreeBSD — no relay servers needed
 
----
-
-# Contributions of This Work
-
-1. **Complete documentation** of how network programming differs between Linux, FreeBSD, and macOS — focusing on raw sockets, BPF, and ICMP
-2. **Practical strategies** for writing portable network code in Go using platform-specific build tags and abstraction patterns
-3. **Analysis of packet capture** across different link layer types and how it affects BPF filter design
-4. **Testing results** on FreeBSD 14.3-RELEASE, OPNsense 25.1, and modern macOS
-5. **Open-source code** available for the BSD community and network engineers
+**Contributions:**
+1. Documentation of network programming differences (raw sockets, BPF, ICMP) across Linux/FreeBSD/macOS
+2. Portable network code strategies in Go (build tags + abstraction patterns)
+3. Packet capture analysis across link layer types and BPF filter design
+4. Testing on FreeBSD 14.3-RELEASE, OPNsense 25.1, and macOS
+5. Open-source code for the BSD community
 
 ---
 
@@ -203,42 +195,19 @@ WireGuard, NAT Types, and STUN
 
 ---
 
-# Full-Cone NAT
+# Cone NAT Types (P2P Friendly)
 
-- Once mapped, **any** external host can send to the mapped port
-- Most permissive — ideal for P2P
+**Full-Cone**: Any external host can send to the mapped port → **best for P2P**
 
-```
-Internal 192.168.1.10:5000 → NAT → External 203.0.113.5:40000
-                                          ↑
-                              Any host can send here
-```
+**Restricted-Cone**: Only hosts you contacted can reply (from any port)
 
----
-
-# Restricted-Cone NAT
-
-- NAT allows inbound only from hosts you **previously contacted**
-- External host can reply from **any port**
+**Port-Restricted-Cone**: Must match both IP **and** port — **most common** in home routers
 
 ```
-Internal sends to 198.51.100.1 → NAT mapping created
-198.51.100.1 (any port) → Allowed ✓
-198.51.100.2 (any port) → Blocked ✗
-```
-
----
-
-# Port-Restricted-Cone NAT
-
-- NAT checks **both** source IP **and** source port
-- **Most common** type in home routers
-
-```
-Internal sends to 198.51.100.1:3478 → NAT mapping created
-198.51.100.1:3478 → Allowed ✓
-198.51.100.1:9999 → Blocked ✗ (wrong port)
-198.51.100.2:3478 → Blocked ✗ (wrong IP)
+Full-Cone:       Any host         → mapped port → Allowed ✓
+Restricted:      Contacted host   → any port    → Allowed ✓
+Port-Restricted: Contacted host   → same port   → Allowed ✓
+                 Contacted host   → wrong port  → Blocked ✗
 ```
 
 ---
@@ -483,53 +452,23 @@ Application
     └── open(/dev/bpf2) → bind to vtnet0 → set filter → read
 ```
 
-- Each `/dev/bpf` device binds to **one** interface
-- Filter programs are per-device
-- Packets include **full link layer frame**
-  - Linux raw sockets strip L2 headers
-  - FreeBSD BPF preserves them
+| | **Linux** (Centralized) | **FreeBSD** (Per-interface) |
+|-|------------------------|---------------------------|
+| Scope | One raw socket → all interfaces | One `/dev/bpf` per interface |
+| BPF | Single filter program | Separate filter per device |
+| Packets | IP-level (no L2 header) | **Full frame with link layer header** |
 
 > This is the **fundamental architectural difference**.
 
 ---
 
-# Linux vs FreeBSD: Packet Capture Model
+# Consequences of the BSD Model
 
-<!-- IMAGE PROMPT: Split comparison diagram. Left side "Linux": multiple interfaces (eth0, wlan0, eth1) all feeding into ONE funnel labeled "Raw Socket" with a single "BPF Filter". Right side "FreeBSD": each interface (em0, igb0, vtnet0) has its own separate /dev/bpf device with its own BPF filter. Blue color scheme, clean technical style, 16:9 presentation slide. -->
+**1. Interface Enumeration** — Must discover all interfaces, exclude WireGuard (avoid self-capture) and link-down interfaces
 
-**Linux** — Centralized
-- One raw socket → all interfaces
-- One BPF filter program
-- IP-level packets (no L2 header)
+**2. Concurrent Capture** — One goroutine per interface, channel-based synchronization for STUN responses
 
-**FreeBSD** — Per-interface
-- One `/dev/bpf` per interface
-- Separate BPF filter per device
-- Full frame with link layer header
-- Multiple capture goroutines needed
-
----
-
-# Consequences of the BSD Model (1/2)
-
-**1. Interface Enumeration Required**
-- Must discover all network interfaces at startup
-- Must **exclude** the WireGuard interface (avoid self-capture)
-- Must **exclude** link-down interfaces
-
-**2. Multiple Concurrent Capture Loops**
-- One goroutine per interface
-- Read from multiple BPF devices simultaneously
-- Channel-based synchronization for STUN responses
-
----
-
-# Consequences of the BSD Model (2/2)
-
-**3. Link Layer Headers Affect BPF Offsets**
-- Ethernet interfaces: 14-byte header
-- BSD loopback (Null): 4-byte header
-- **Different offsets for the same logical fields!**
+**3. Link Layer Headers Affect BPF Offsets** — Ethernet (14B) vs BSD loopback Null (4B) → **different offsets for the same fields!**
 
 ---
 
@@ -586,73 +525,31 @@ FreeBSD Null (/dev/bpf on lo0):
 ```
 [Protocol Family (4B)][IP Header...][UDP...][Payload]
  0x02000000 = IPv4
- 0x18000000 = IPv6  ┐
- 0x1C000000 = IPv6  ├── Three possible values!
- 0x1E000000 = IPv6  ┘
+ 0x18000000 = IPv6 (AF_INET6=24)  ┐
+ 0x1C000000 = IPv6 (AF_INET6=28)  ├── Three possible values!
+ 0x1E000000 = IPv6 (AF_INET6=30)  ┘     (varies by BSD variant)
 ```
 
-> IPv6 on Null interfaces needs **three-way comparison** in BPF.
+> IPv6 on Null interfaces needs **three-way comparison** in BPF — significantly more complex filter.
 
 ---
 
-# Why Three IPv6 Values on BSD Null?
+# Challenge #4: ICMP Without SO_BINDTODEVICE
 
-The 4-byte Null header stores the **address family**:
-
-| Value (big-endian) | Meaning |
-|:-------------------:|---------|
-| `0x02000000` | AF_INET (IPv4) |
-| `0x18000000` | AF_INET6 (24) |
-| `0x1C000000` | AF_INET6 (28) — some BSDs |
-| `0x1E000000` | AF_INET6 (30) — some BSDs |
-
-- Different BSD variants use different AF_INET6 values
-- Our BPF filter must handle **all three** to be portable
-- Makes the Null IPv6 filter significantly more complex
-
----
-
-# Challenge #4: ICMP Without SO_BINDTODEVICE (1/2)
-
-## Linux: Bind ICMP to specific WireGuard interface
+| | **Linux** | **FreeBSD** |
+|-|-----------|-------------|
+| Binding | `SO_BINDTODEVICE` → bind to wg0 | Not available |
+| VRF | Multiple routing tables | Single global routing table |
+| ICMP routing | Explicit interface binding | Routing table determines interface |
 
 ```go
-syscall.SetsockoptString(fd,
-    syscall.SOL_SOCKET,
-    syscall.SO_BINDTODEVICE,
-    "wg0")  // Pings ALWAYS go through wg0
+// Linux: explicit binding          // FreeBSD: routing-based
+syscall.SetsockoptString(fd,        conn, _ := icmp.ListenPacket(
+    syscall.SOL_SOCKET,                 "ip4:icmp", "0.0.0.0")
+    syscall.SO_BINDTODEVICE, "wg0") // deviceName ignored
 ```
 
-## FreeBSD: No SO_BINDTODEVICE
-
-```go
-conn, _ := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
-// deviceName parameter accepted but IGNORED
-// Routing table determines which interface is used
-```
-
----
-
-# Challenge #4: ICMP Without SO_BINDTODEVICE (2/2)
-
-- FreeBSD lacks VRF (Virtual Routing and Forwarding)
-- Relies on the **routing table** to direct ICMP traffic
-- Works in typical single-WAN setups
-- Complex multi-interface scenarios may need extra routing rules
-
----
-
-# ICMP Binding: Why Linux Needs SO_BINDTODEVICE
-
-- Linux supports **VRF (Virtual Routing and Forwarding)** — multiple independent routing tables
-- `SO_BINDTODEVICE` ensures the socket is bound to the correct VRF/routing table
-- Without it, ICMP falls back to the **main routing table** instead of the VRF-specific one
-
-## FreeBSD has no VRF
-
-- Only one global routing table
-- ICMP is routed by the system routing table — no need to bind to a specific interface
-- Ping monitoring works correctly as long as the routing table has the correct entries
+- FreeBSD: works in typical single-WAN setups; complex multi-interface may need extra routing rules
 
 ---
 
@@ -731,60 +628,29 @@ ctrl const ───┼─── ctrl_freebsd.go   (UpdateOnly=false)
 
 ---
 
-# Go Build Tags: Platform-Specific Compilation (1/2)
+# Go Build Tags: Platform-Specific Compilation
 
 ```go
 //go:build linux
 package stun
-
-// Linux: raw socket, system-wide BPF
 func New(ctx context.Context, excludeInterface string,
     port uint16, protocol string) (*Stun, error) {
-    conn, _ := net.ListenPacket("ip4:17", "0.0.0.0")
+    conn, _ := net.ListenPacket("ip4:17", "0.0.0.0")  // System-wide
     // SetBPF(...)
 }
 ```
 
----
-
-# Go Build Tags: Platform-Specific Compilation (2/2)
-
 ```go
 //go:build freebsd || darwin
 package stun
-
-// BSD: go-pcap, per-interface /dev/bpf
 func New(ctx context.Context, excludeInterface string,
     port uint16, protocol string) (*Stun, error) {
     interfaces := getAllEligibleInterfaces(excludeInterface)
-    // Open pcap handle for each interface...
+    // Open pcap handle per interface...
 }
 ```
 
----
-
-# Common STUN Interface
-
-Both platforms export **identical** API:
-
-```go
-type Stun struct {
-    // Platform-specific internal fields (hidden)
-}
-
-func New(ctx context.Context,
-    excludeInterface string,
-    port uint16,
-    protocol string) (*Stun, error)
-
-func (s *Stun) Connect(ctx context.Context,
-    stunAddr string) (string, int, error)
-
-func (s *Stun) Start(ctx context.Context)
-func (s *Stun) Stop() error
-```
-
-Application code is **completely platform-agnostic**.
+Same API signature, different implementations — selected at **compile time**.
 
 ---
 
@@ -837,29 +703,6 @@ for _, ifaceName := range eligibleInterfaces {
     s.handles = append(s.handles, interfaceHandle{...})
 }
 ```
-
----
-
-# Solution: Payload Offset Calculation
-
-```go
-func calculatePayloadOffset(linkType uint32,
-    protocol string) uint32 {
-    if linkType == pcap.LinkTypeNull {
-        if protocol == "ipv6" {
-            return 4 + 40 + 8   // Null(4) + IPv6(40) + UDP(8)
-        }
-        return 4 + 20 + 8       // Null(4) + IPv4(20) + UDP(8)
-    }
-    // Ethernet
-    if protocol == "ipv6" {
-        return 14 + 40 + 8      // Eth(14) + IPv6(40) + UDP(8)
-    }
-    return 14 + 20 + 8          // Eth(14) + IPv4(20) + UDP(8)
-}
-```
-
-Each interface handle stores its own `payloadOff` → correct STUN message parsing regardless of link type.
 
 ---
 
@@ -923,85 +766,7 @@ func stunEthernetIPv6BpfFilter(port uint16) []bpf.Instruction {
 
 ---
 
-# Solution: Null Loopback IPv6 BPF Filter
-
-The most complex — **three-way protocol family check**:
-
-```go
-// Null header for IPv6 has 3 possible values:
-bpf.LoadAbsolute{Off: 0, Size: 4},
-bpf.JumpIf{Val: 0x18000000, SkipTrue: 2},   // AF_INET6 (24)
-bpf.JumpIf{Val: 0x1C000000, SkipTrue: 1},   // AF_INET6 (28)
-bpf.JumpIf{Val: 0x1E000000, SkipFalse: N},  // AF_INET6 (30)
-
-// Then check UDP Next Header, port, and STUN cookie
-// with Null(4) + IPv6(40) offsets...
-```
-
-vs. Null IPv4: just one check (`0x02000000`)
-vs. Ethernet: just one check (`0x86DD`)
-
-> Three-way branch makes the BPF bytecode **significantly larger**.
-
----
-
-# BPF Filter Decision Tree
-
-```
-Packet arrives on interface
-    │
-    ├── What link type?
-    │   ├── Ethernet (14B header)
-    │   │   ├── IPv4: check EtherType 0x0800 → proto 17 → port → cookie
-    │   │   └── IPv6: check EtherType 0x86DD → NH 17 → port → cookie
-    │   │
-    │   └── Null (4B header)
-    │       ├── IPv4: check family 0x02000000 → proto 17 → port → cookie
-    │       └── IPv6: check family 0x18/1C/1E → NH 17 → port → cookie
-    │                          ↑
-    │                  Three-way check!
-    │
-    └── Accept (STUN response) or Reject (everything else)
-```
-
----
-
 # Solution: Concurrent Packet Capture
-
-```go
-func (s *Stun) Start(ctx context.Context) {
-    s.once.Do(func() {
-        s.waitGroup.Add(len(s.handles))
-        for _, ih := range s.handles {
-            go func(handle interfaceHandle) {
-                defer s.waitGroup.Done()
-                defer handle.handle.Close()
-                for {
-                    select {
-                    case <-ctx.Done():
-                        return
-                    default:
-                        buf, _, err := handle.handle.ReadPacketData()
-                        if err != nil { continue }
-                        m := &stun.Message{
-                            Raw: buf[handle.payloadOff:],
-                        }
-                        if err := m.Decode(); err != nil { continue }
-                        s.packetChan <- m  // First response wins
-                        return
-                    }
-                }
-            }(ih)
-        }
-    })
-}
-```
-
----
-
-# Concurrent Capture: How It Works
-
-<!-- IMAGE PROMPT: Flow diagram showing three parallel goroutines (labeled em0, igb0, vtnet0) each reading from their own /dev/bpf device. Arrows from all three converge into a shared Go channel (packetChan). The channel connects to a "STUN Handler" box. Show the concurrent nature with parallel arrows. FreeBSD daemon logo in the corner. Clean technical diagram, blue and green, 16:9. -->
 
 ```
 Goroutine (em0)    → /dev/bpf0 → Read → Decode ──┐
@@ -1010,10 +775,9 @@ Goroutine (vtnet0) → /dev/bpf2 → Read → Decode ──┘       │
                                                     STUN Handler
 ```
 
-- Each goroutine reads its own `/dev/bpf` device
-- First to capture a valid STUN response sends it to the channel
-- Others are cancelled via Go context
-- `sync.Once` ensures Start() is only called once
+- One goroutine per interface, each reads its own `/dev/bpf` device
+- First to capture a valid STUN response sends to `packetChan`
+- Others cancelled via Go context; `sync.Once` ensures single Start()
 
 ---
 
@@ -1066,57 +830,6 @@ const UpdateOnly = true
 
 One constant per platform — clean, no runtime checks.
 
----
-
-# Solution: go-pcap Library
-
-`github.com/packetcap/go-pcap` — pure Go BPF access for FreeBSD:
-
-```go
-// Open BPF device for interface
-handle, err := pcap.OpenLive(ctx, "em0",
-    PacketSize,           // snap length
-    false,                // promiscuous mode
-    timeout,              // read timeout
-    pcap.DefaultSyscalls) // syscall interface
-
-// Get link layer type for offset calculation
-linkType := handle.LinkType()
-// → pcap.LinkTypeNull or pcap.LinkTypeEthernet
-
-// Set compiled BPF filter
-handle.SetRawBPFFilter(rawInstructions)
-
-// Read filtered packets
-buf, captureInfo, err := handle.ReadPacketData()
-```
-
-No CGO needed for packet capture (CGO only for wgctrl).
-
----
-
-# Complete BSD STUN Flow
-
-```
-1. getAllEligibleInterfaces("wg0")
-   → [em0, igb0, vtnet0]
-
-2. For each interface:
-   a. pcap.OpenLive(ctx, iface, ...)
-   b. Detect LinkType (Ethernet / Null)
-   c. Build BPF filter with correct offsets
-   d. Calculate payload offset
-
-3. Start() → spawn goroutines per interface
-
-4. Connect(stunAddr):
-   a. Build raw UDP packet with STUN Binding Request
-   b. Send via raw socket to STUN server
-   c. Wait on packetChan for filtered STUN response
-   d. Parse XOR-MAPPED-ADDRESS → return public IP:port
-
-5. Stop() → cancel context, wait for goroutines
-```
 
 ---
 
@@ -1166,25 +879,16 @@ Real-World Validation
 
 ---
 
-# FreeBSD 14.3-RELEASE Results (1/2)
+# FreeBSD 14.3-RELEASE Results
 
 **Basic connectivity:** ✅
 - STUN discovery correctly identifies public endpoint
 - Endpoint encrypted and stored (Cloudflare DNS TXT)
 - WireGuard tunnel established automatically
 
-**BPF filter correctness:** ✅
-- Tested on Ethernet (em0, igb0) and virtual (vtnet0) interfaces
-- Correct offset calculations for both IPv4 and IPv6
+**BPF filter correctness:** ✅ — Tested on Ethernet (em0, igb0, vtnet0), correct offsets for IPv4/IPv6
 
----
-
-# FreeBSD 14.3-RELEASE Results (2/2)
-
-**Kernel WireGuard (if-wg):** ✅
-- `UpdateOnly=false` workaround functions correctly
-- Peer endpoints updated via remove + re-add
-- Brief interruption acceptable (sub-second)
+**Kernel WireGuard (if-wg):** ✅ — `UpdateOnly=false` workaround works, sub-second interruption
 
 ---
 
@@ -1257,124 +961,7 @@ Normal ── Normal ── FAIL! ── Retry 2s ── Retry 2s ── Retry 2
 
 <!-- _class: section-divider -->
 
-# 7. Lessons for BSD Developers
-
-Cross-Platform Network Programming in Go
-
----
-
-# Lesson 1: Abstract Early, Abstract at the Right Level
-
-```
-                 Application Layer
-                      │
-              ┌───────┴───────┐
-              │ Common API    │ ← New(), Connect(), Start(), Stop()
-              ├───────┬───────┤
-              │ Linux │  BSD  │ ← Platform-specific implementations
-              └───────┴───────┘
-```
-
-- Define the interface **first**, then implement per-platform
-- Go interfaces + build tags = clean separation
-- Application code never knows which platform it's on
-- Test the interface contract, not the implementation
-
----
-
-# Lesson 2: BSD's BPF Is More Faithful to the Original
-
-- Linux adapted BPF into **socket filters** (and later eBPF)
-- FreeBSD preserves the **original device-based BPF** design
-
-| Aspect | Linux (adapted) | FreeBSD (original) |
-|--------|----------------|-------------------|
-| Scope | System-wide socket | Per-interface device |
-| Headers | IP-level | Full frame |
-| Simplicity | Simpler for apps | More explicit control |
-| Flexibility | Less granular | Per-interface filters |
-
-> Understanding BSD's BPF model is essential for network tool portability.
-
----
-
-# Lesson 3: Link Layers Are Not Just "Ethernet"
-
-```
-Common mistake: hardcoding Ethernet header = 14 bytes
-
-Reality on FreeBSD:
-  em0    → Ethernet (14B)
-  vtnet0 → Ethernet (14B)
-  lo0    → Null (4B)         ← Different!
-  gif0   → Null (4B)         ← Different!
-  tun0   → Null or none      ← Different!
-```
-
-**Always check `LinkType()` per interface!**
-- Use `pcap.LinkTypeNull` vs `pcap.LinkTypeEthernet`
-- Calculate offsets dynamically, never hardcode
-- Test on loopback too (not just physical NICs)
-
----
-
-# Lesson 4: Don't Assume Linux Socket Options Exist
-
-**Linux-specific socket options used in network tools:**
-
-| Option | Linux | FreeBSD | Workaround |
-|--------|:-----:|:-------:|------------|
-| `SO_BINDTODEVICE` | ✅ | ❌ | Use routing table |
-| `IP_TRANSPARENT` | ✅ | ❌ | `ipfw` / `pf` rules |
-| `SO_REUSEPORT` (with BPF) | ✅ | Partial | Redesign |
-| Raw IP socket (system-wide) | ✅ | ❌ | Use `/dev/bpf` |
-
-> When porting from Linux: **audit every socket option** against FreeBSD `man` pages.
-
----
-
-# Lesson 5: Go Build Tags Are Your Best Friend
-
-```go
-//go:build freebsd
-// FreeBSD-specific code
-
-//go:build linux
-// Linux-specific code
-
-//go:build freebsd || darwin
-// All BSD-family (shared implementation)
-
-//go:build !linux
-// Everything except Linux
-```
-
-- Compile-time selection — no runtime overhead
-- Keep platform code in **separate files**
-- Share code between FreeBSD and macOS where possible
-- Use constants (not functions) for simple platform differences
-
----
-
-# Lesson 6: Test on Real FreeBSD, Not Just VMs
-
-**Issues only found on real hardware:**
-- NIC driver differences (em vs igb vs vtnet)
-- Timing variations in BPF reads
-- Interface naming conventions
-
-**Issues found on OPNsense specifically:**
-- Multi-interface filtering (WAN, LAN, DMZ)
-- Interface state changes during operation
-- Firewall rules interacting with raw packet capture
-
-> Virtual machines catch most issues, but real deployments reveal edge cases.
-
----
-
-<!-- _class: section-divider -->
-
-# 8. Discussion & Future Work
+# 7. Discussion & Future Work
 
 ---
 
@@ -1387,22 +974,6 @@ Reality on FreeBSD:
 | IPv4-only ping monitoring | Can't check IPv6 tunnels | ICMPv6 support (needs work) |
 | FreeBSD `UpdateOnly` | Brief reconnection | Future if-wg kernel patch |
 | `wgctrl-go` requires CGO | No static binary on FreeBSD | Pure-Go wgctrl implementation |
-
----
-
-# FreeBSD Platform Support Summary
-
-| Feature | Status | Notes |
-|---------|:------:|-------|
-| STUN Discovery (IPv4) | ✅ | go-pcap + /dev/bpf |
-| STUN Discovery (IPv6) | ✅ | EtherType + Null checks |
-| Kernel WireGuard (if-wg) | ✅ | CGO required |
-| Userspace WireGuard (wg-go) | ✅ | Pure Go |
-| Ping Monitoring | ✅ | Routing-based |
-| Multi-interface | ✅ | Per-interface BPF |
-| OPNsense deployment | ✅ | Tested on 25.1 |
-| pfSense deployment | ⚠️ | Untested (FreeBSD base, expected to work) |
-| Static binary | ⚠️ | C libs statically linked via CGO |
 
 ---
 
@@ -1591,3 +1162,25 @@ macOS is also BSD-based and shares the FreeBSD implementation:
 | **FreeBSD ARM64** | **freebsd** | **arm64** | **1** | **Static (C libs linked)** |
 | macOS x86_64 | darwin | amd64 | 0 | Static |
 | macOS ARM64 | darwin | arm64 | 0 | Static |
+
+---
+
+# Backup: Null Loopback IPv6 BPF Filter
+
+The most complex — **three-way protocol family check**:
+
+```go
+// Null header for IPv6 has 3 possible values:
+bpf.LoadAbsolute{Off: 0, Size: 4},
+bpf.JumpIf{Val: 0x18000000, SkipTrue: 2},   // AF_INET6 (24)
+bpf.JumpIf{Val: 0x1C000000, SkipTrue: 1},   // AF_INET6 (28)
+bpf.JumpIf{Val: 0x1E000000, SkipFalse: N},  // AF_INET6 (30)
+
+// Then check UDP Next Header, port, and STUN cookie
+// with Null(4) + IPv6(40) offsets...
+```
+
+vs. Null IPv4: just one check (`0x02000000`)
+vs. Ethernet: just one check (`0x86DD`)
+
+> Three-way branch makes the BPF bytecode **significantly larger**.
