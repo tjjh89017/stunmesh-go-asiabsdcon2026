@@ -542,14 +542,17 @@ FreeBSD Null (/dev/bpf on lo0):
 | VRF | Multiple routing tables | Single global routing table |
 | ICMP routing | Explicit interface binding | Routing table determines interface |
 
+**Linux:**
 ```go
-// Linux: explicit binding          // FreeBSD: routing-based
-syscall.SetsockoptString(fd,        conn, _ := icmp.ListenPacket(
-    syscall.SOL_SOCKET,                 "ip4:icmp", "0.0.0.0")
-    syscall.SO_BINDTODEVICE, "wg0") // deviceName ignored
+syscall.SetsockoptString(fd, syscall.SOL_SOCKET,
+    syscall.SO_BINDTODEVICE, "wg0")  // Pings ALWAYS go through wg0
 ```
 
-- FreeBSD: works in typical single-WAN setups; complex multi-interface may need extra routing rules
+**FreeBSD:**
+```go
+conn, _ := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+// deviceName accepted but IGNORED — routing table determines interface
+```
 
 ---
 
